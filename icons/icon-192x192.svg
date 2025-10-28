@@ -1,0 +1,34 @@
+<svg width="192" height="192" viewBox="0 0 192 192" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- 배경 원 -->
+  <circle cx="96" cy="96" r="88" fill="url(#grad1)" stroke="#fff" stroke-width="4"/>
+  
+  <!-- PWA 심볼 -->
+  <rect x="60" y="60" width="72" height="72" rx="8" fill="#fff" opacity="0.9"/>
+  
+  <!-- P 문자 -->
+  <path d="M 75 75 L 75 117 L 95 117 Q 105 117 105 107 L 105 85 Q 105 75 95 75 Z M 85 75 L 85 85 L 95 85 L 95 75 Z" fill="#667eea"/>
+  
+  <!-- W 문자 -->
+  <path d="M 110 75 L 115 117 L 125 117 L 130 75 L 125 75 L 122 105 L 118 75 Z" fill="#667eea"/>
+  
+  <!-- A 문자 -->
+  <path d="M 135 75 L 140 117 L 150 117 L 155 75 L 150 75 L 147 105 L 143 75 Z" fill="#667eea"/>
+  
+  <!-- 네트워크 연결 표시 -->
+  <circle cx="96" cy="140" r="8" fill="#fff" opacity="0.8"/>
+  <circle cx="80" cy="140" r="6" fill="#fff" opacity="0.6"/>
+  <circle cx="112" cy="140" r="6" fill="#fff" opacity="0.6"/>
+  
+  <!-- 연결선 -->
+  <line x1="88" y1="140" x2="104" y2="140" stroke="#fff" stroke-width="2" opacity="0.8"/>
+  <line x1="72" y1="140" x2="88" y2="140" stroke="#fff" stroke-width="2" opacity="0.6"/>
+  <line x1="104" y1="140" x2="120" y2="140" stroke="#fff" stroke-width="2" opacity="0.6"/>
+</svg>
+

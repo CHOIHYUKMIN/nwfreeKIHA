@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>건강검진 시스템 - Health Checkup System</title>
+    <meta name="description" content="PWA 기반 건강검진 관리 시스템">
+    <meta name="theme-color" content="#4f46e5">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" href="icons/icon-192x192.svg">
+    <link rel="apple-touch-icon" href="icons/icon-192x192.svg">
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles_calendar_report.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <!-- SheetJS for Excel export/import -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+    <div id="app" class="app-container">
+        <!-- 헤더 -->
+        <header class="app-header">
+            <div class="header-content">
+                <div class="header-left">
+                    <i class="fas fa-heartbeat header-icon"></i>
+                    <h1 class="app-title">건강검진 시스템</h1>
+                </div>
+                <div class="header-right">
+                    <span id="version-info" class="status-badge" style="background: #6366f1;">
+                        <i class="fas fa-code-branch"></i> <span>버전</span>
+                        <small id="version-date" style="display: block; font-size: 0.75em; opacity: 0.8;">v-.- / -</small>
+                    </span>
+                    <span id="connection-status" class="status-badge online">
+                        <i class="fas fa-wifi"></i> 온라인
+                    </span>
+                    <span id="sync-status" class="status-badge">
+                        <i class="fas fa-sync-alt"></i> <span id="sync-status-text">동기화 완료</span>
+                        <small id="sync-time" style="display: block; font-size: 0.75em; opacity: 0.8;"></small>
+                    </span>
+                    <button class="btn btn-icon" id="settings-btn" title="설정">
+                        <i class="fas fa-cog"></i>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- 메인 네비게이션 -->
+        <nav class="main-nav">
+            <div class="nav-content">
+                <button class="nav-item active" data-section="dashboard">
+                    <i class="fas fa-chart-pie"></i>
+                    <span>대시보드</span>
+                </button>
+                <button class="nav-item" data-section="patients">
+                    <i class="fas fa-users"></i>
+                    <span>환자 관리</span>
+                </button>
+                <button class="nav-item" data-section="checkups">
+                    <i class="fas fa-clipboard-list"></i>
+                    <span>검진 관리</span>
+                </button>
+                <button class="nav-item" data-section="schedule">
+                    <i class="fas fa-calendar-alt"></i>
+                    <span>검진 일정</span>
+                </button>
+                <button class="nav-item" data-section="reports">
+                    <i class="fas fa-file-medical-alt"></i>
+                    <span>리포트</span>
+                </button>
+            </div>
+        </nav>
+
+        <!-- 메인 콘텐츠 -->
+        <main class="main-content">
+            <!-- 대시보드 섹션 -->
+            <section id="dashboard" class="content-section active">
+                <div class="section-header">
+                    <h2><i class="fas fa-chart-pie"></i> 대시보드</h2>
+                    <p class="section-subtitle">오늘의 건강검진 현황을 확인하세요</p>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-card primary">
+                        <div class="stat-icon">
+                            <i class="fas fa-users"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="total-patients">0</h3>
+                            <p>총 환자 수</p>
+                        </div>
+                    </div>
+                    <div class="stat-card success">
+                        <div class="stat-icon">
+                            <i class="fas fa-calendar-check"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="today-checkups">0</h3>
+                            <p>오늘 예정 검진</p>
+                        </div>
+                    </div>
+                    <div class="stat-card warning">
+                        <div class="stat-icon">
+                            <i class="fas fa-clock"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="in-progress-checkups">0</h3>
+                            <p>진행 중 검진</p>
+                        </div>
+                    </div>
+                    <div class="stat-card info">
+                        <div class="stat-icon">
+                            <i class="fas fa-check-circle"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3 id="completed-checkups">0</h3>
+                            <p>완료된 검진</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="dashboard-content">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3><i class="fas fa-list"></i> 최근 검진 기록</h3>
+                        </div>
+                        <div class="card-body">
+                            <div id="recent-checkups" class="checkup-list">
+                                <!-- 최근 검진 목록이 여기에 동적으로 추가됩니다 -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 환자 관리 섹션 -->
+            <section id="patients" class="content-section">
+                <div class="section-header">
+                    <h2><i class="fas fa-users"></i> 환자 관리</h2>
+                    <button class="btn btn-primary" id="add-patient-btn">
+                        <i class="fas fa-plus"></i> 환자 등록
+                    </button>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <div class="search-bar">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="patient-search" placeholder="환자명, 환자번호로 검색...">
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div id="patients-list" class="patients-grid">
+                            <!-- 환자 목록이 여기에 동적으로 추가됩니다 -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 검진 관리 섹션 -->
+            <section id="checkups" class="content-section">
+                <div class="section-header">
+                    <h2><i class="fas fa-clipboard-list"></i> 검진 관리</h2>
+                    <button class="btn btn-primary" id="add-checkup-btn">
+                        <i class="fas fa-plus"></i> 검진 예약
+                    </button>
+                </div>
+
+                <div class="filter-bar">
+                    <div class="search-bar">
+                        <i class="fas fa-search"></i>
+                        <input type="text" id="checkup-search" placeholder="환자명, 검진번호, 검진유형으로 검색...">
+                    </div>
+                    <select id="status-filter" class="form-select">
+                        <option value="">모든 상태</option>
+                        <option value="scheduled">예약됨</option>
+                        <option value="in_progress">진행중</option>
+                        <option value="completed">완료</option>
+                        <option value="cancelled">취소됨</option>
+                    </select>
+                    <input type="date" id="date-filter" class="form-input">
+                </div>
+
+                <div class="card">
+                    <div class="card-body">
+                        <div id="checkups-list" class="checkups-table">
+                            <!-- 검진 목록이 여기에 동적으로 추가됩니다 -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 검진 일정 섹션 -->
+            <section id="schedule" class="content-section">
+                <div class="section-header">
+                    <h2><i class="fas fa-calendar-alt"></i> 검진 일정</h2>
+                </div>
+
+                <div class="calendar-controls">
+                    <button class="btn btn-secondary" id="prev-month-btn">
+                        <i class="fas fa-chevron-left"></i> 이전
+                    </button>
+                    <h3 id="current-month-year"></h3>
+                    <button class="btn btn-secondary" id="next-month-btn">
+                        다음 <i class="fas fa-chevron-right"></i>
+                    </button>
+                </div>
+
+                <div class="card">
+                    <div class="card-body">
+                        <div id="calendar-view" class="calendar-grid">
+                            <!-- 캘린더가 여기에 동적으로 추가됩니다 -->
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card mt-3">
+                    <div class="card-header">
+                        <h3 id="selected-date-title">선택된 날짜의 검진</h3>
+                    </div>
+                    <div class="card-body">
+                        <div id="daily-checkups-list">
+                            <p class="text-center text-muted">날짜를 선택하세요</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 리포트 섹션 -->
+            <section id="reports" class="content-section">
+                <div class="section-header">
+                    <h2><i class="fas fa-file-medical-alt"></i> 리포트</h2>
+                </div>
+
+                <!-- 통계 요약 -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon" style="background: #4CAF50;">
+                            <i class="fas fa-check-circle"></i>
+                        </div>
+                        <div class="stat-details">
+                            <h4 id="report-completed-count">0</h4>
+                            <p>완료된 검진</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon" style="background: #2196F3;">
+                            <i class="fas fa-calendar-check"></i>
+                        </div>
+                        <div class="stat-details">
+                            <h4 id="report-scheduled-count">0</h4>
+                            <p>예약된 검진</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon" style="background: #FF9800;">
+                            <i class="fas fa-spinner"></i>
+                        </div>
+                        <div class="stat-details">
+                            <h4 id="report-progress-count">0</h4>
+                            <p>진행 중 검진</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon" style="background: #9C27B0;">
+                            <i class="fas fa-users"></i>
+                        </div>
+                        <div class="stat-details">
+                            <h4 id="report-patients-count">0</h4>
+                            <p>총 환자 수</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 검진 상태별 분포 -->
+                <div class="card mt-3">
+                    <div class="card-header">
+                        <h3><i class="fas fa-chart-pie"></i> 검진 상태별 분포</h3>
+                    </div>
+                    <div class="card-body">
+                        <div id="status-distribution"></div>
+                    </div>
+                </div>
+
+                <!-- 검진 유형별 통계 -->
+                <div class="card mt-3">
+                    <div class="card-header">
+                        <h3><i class="fas fa-chart-bar"></i> 검진 유형별 통계</h3>
+                    </div>
+                    <div class="card-body">
+                        <div id="type-statistics"></div>
+                    </div>
+                </div>
+
+                <!-- 월별 검진 추이 -->
+                <div class="card mt-3">
+                    <div class="card-header">
+                        <h3><i class="fas fa-chart-line"></i> 월별 검진 추이 (최근 6개월)</h3>
+                    </div>
+                    <div class="card-body">
+                        <div id="monthly-trend"></div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- 검진 상세 모달 -->
+        <div id="checkup-detail-modal" class="modal">
+            <div class="modal-content large">
+                <div class="modal-header">
+                    <h3 id="modal-title">검진 상세 정보</h3>
+                    <button class="modal-close" id="modal-close-btn">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+
+                <div class="modal-body">
+                    <!-- 탭 네비게이션 -->
+                    <div class="tab-nav">
+                        <button class="tab-btn active" data-tab="basic">
+                            <i class="fas fa-info-circle"></i> 기본 정보
+                        </button>
+                        <button class="tab-btn" data-tab="items">
+                            <i class="fas fa-list-ul"></i> 검진 항목
+                        </button>
+                        <button class="tab-btn" data-tab="results">
+                            <i class="fas fa-chart-line"></i> 검진 결과
+                        </button>
+                        <button class="tab-btn" data-tab="history">
+                            <i class="fas fa-history"></i> 검진 이력
+                        </button>
+                    </div>
+
+                    <!-- 탭 콘텐츠 -->
+                    <div class="tab-content">
+                        <!-- 기본 정보 탭 -->
+                        <div id="tab-basic" class="tab-panel active">
+                            <div id="basic-info-content">
+                                <!-- 기본 정보가 여기에 동적으로 추가됩니다 -->
+                            </div>
+                        </div>
+
+                        <!-- 검진 항목 탭 -->
+                        <div id="tab-items" class="tab-panel">
+                            <div id="items-content">
+                                <!-- 검진 항목이 여기에 동적으로 추가됩니다 -->
+                            </div>
+                        </div>
+
+                        <!-- 검진 결과 탭 -->
+                        <div id="tab-results" class="tab-panel">
+                            <div id="results-content">
+                                <!-- 검진 결과가 여기에 동적으로 추가됩니다 -->
+                            </div>
+                        </div>
+
+                        <!-- 검진 이력 탭 -->
+                        <div id="tab-history" class="tab-panel">
+                            <div id="history-content">
+                                <!-- 검진 이력이 여기에 동적으로 추가됩니다 -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" id="modal-cancel-btn">닫기</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 환자 등록/수정 모달 -->
+        <div id="patient-modal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="patient-modal-title">환자 등록</h3>
+                    <button class="modal-close">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+
+                <div class="modal-body">
+                    <form id="patient-form" class="form-grid">
+                        <div class="form-group">
+                            <label for="patient-name">이름 *</label>
+                            <input type="text" id="patient-name" name="name" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="birth-date">생년월일 *</label>
+                            <input type="date" id="birth-date" name="birth_date" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="gender">성별 *</label>
+                            <select id="gender" name="gender" required>
+                                <option value="">선택하세요</option>
+                                <option value="M">남성</option>
+                                <option value="F">여성</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="phone">전화번호</label>
+                            <input type="tel" id="phone" name="phone">
+                        </div>
+                        <div class="form-group">
+                            <label for="email">이메일</label>
+                            <input type="email" id="email" name="email">
+                        </div>
+                        <div class="form-group full-width">
+                            <label for="address">주소</label>
+                            <input type="text" id="address" name="address">
+                        </div>
+                        <div class="form-group full-width">
+                            <label for="emergency-contact">비상연락처</label>
+                            <input type="text" id="emergency-contact" name="emergency_contact">
+                        </div>
+                    </form>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary modal-close">취소</button>
+                    <button type="submit" form="patient-form" class="btn btn-primary">저장</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 검진 예약 모달 -->
+        <div id="checkup-modal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="checkup-modal-title">검진 예약</h3>
+                    <button type="button" class="modal-close">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+
+                <div class="modal-body">
+                    <form id="checkup-form" class="form-grid">
+                        <div class="form-group">
+                            <label for="checkup-patient">환자 선택 *</label>
+                            <select id="checkup-patient" name="patient_id" required>
+                                <option value="">환자를 선택하세요</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="checkup-type">검진 유형 *</label>
+                            <select id="checkup-type" name="checkup_type_id" required>
+                                <option value="">검진 유형을 선택하세요</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="checkup-date">검진 날짜 *</label>
+                            <input type="date" id="checkup-date" name="checkup_date" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="checkup-time">검진 시간 *</label>
+                            <input type="time" id="checkup-time" name="checkup_time" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="doctor-name">담당 의사</label>
+                            <input type="text" id="doctor-name" name="doctor_name" placeholder="담당 의사명">
+                        </div>
+                        <div class="form-group full-width">
+                            <label for="checkup-notes">특이사항</label>
+                            <textarea id="checkup-notes" name="notes" rows="3" placeholder="특이사항이나 요청사항을 입력하세요"></textarea>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary modal-close">취소</button>
+                    <button type="submit" form="checkup-form" class="btn btn-primary">예약</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 설정 모달 -->
+        <div id="settings-modal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>동기화 설정</h3>
+                    <button class="modal-close">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+
+                <div class="modal-body">
+                    <div class="settings-section">
+                        <h4><i class="fas fa-server"></i> 서버 정보</h4>
+                        <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px; margin-top: 0.5rem;">
+                            <div style="margin-bottom: 0.5rem;">
+                                <strong>로컬 서버:</strong>
+                                <code style="background: white; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.875rem;">http://localhost:3000</code>
+                            </div>
+                            <div style="margin-bottom: 0.5rem;">
+                                <strong>공개 URL:</strong>
+                                <code style="background: white; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.875rem;">https://nwfreepilot.loca.lt</code>
+                                <button onclick="navigator.clipboard.writeText('https://nwfreepilot.loca.lt')" style="margin-left: 0.5rem; padding: 0.25rem 0.5rem; cursor: pointer; border: 1px solid #ddd; border-radius: 4px; background: white;">
+                                    <i class="fas fa-copy"></i> 복사
+                                </button>
+                            </div>
+                            <p class="help-text small" style="margin: 0.5rem 0 0 0;">
+                                💡 공개 URL은 외부에서 접근 가능합니다. 이 터널을 종료하면 URL이 작동을 멈춥니다.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h4><i class="fas fa-database"></i> IndexedDB 캐싱 설정</h4>
+                        <p class="help-text">IndexedDB 캐싱을 활성화하면 서버 데이터를 로컬에 저장하여 오프라인에서도 사용할 수 있습니다. 네트워크가 안정적인 환경에서는 비활성화하여 성능을 향상시킬 수 있습니다.</p>
+
+                        <div class="setting-toggle">
+                            <label class="toggle-container">
+                                <input type="checkbox" id="indexeddb-cache-toggle" checked>
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-label">IndexedDB 캐싱</span>
+                            </label>
+                            <p class="help-text small" id="indexeddb-cache-status">활성화됨 (오프라인 지원)</p>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h4><i class="fas fa-cog"></i> 자동 동기화 설정</h4>
+                        <p class="help-text">자동 동기화를 활성화하면 설정한 시간마다 서버와 자동으로 동기화됩니다. IndexedDB 캐싱이 활성화된 경우에만 동작합니다.</p>
+
+                        <div class="setting-toggle">
+                            <label class="toggle-container">
+                                <input type="checkbox" id="auto-sync-toggle" checked>
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-label">자동 동기화</span>
+                            </label>
+                            <p class="help-text small" id="auto-sync-status">활성화됨 (300초 간격)</p>
+                        </div>
+
+                        <div class="form-group" style="margin-top: 15px;">
+                            <label for="sync-interval-input">동기화 주기 (초)</label>
+                            <input type="number" id="sync-interval-input" class="form-input" min="10" max="3600" value="300" style="max-width: 200px;">
+                            <p class="help-text small">최소 10초, 최대 3600초 (1시간)</p>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h4><i class="fas fa-sync-alt"></i> 수동 동기화</h4>
+                        <p class="help-text">서버와 로컬 데이터를 수동으로 동기화합니다.</p>
+
+                        <div class="sync-buttons">
+                            <button class="btn btn-primary btn-block" id="sync-from-server-btn">
+                                <i class="fas fa-download"></i> 서버 → 로컬 (전체 다운로드)
+                            </button>
+                            <p class="help-text small">서버의 모든 데이터를 로컬 IndexedDB에 저장합니다.</p>
+
+                            <button class="btn btn-success btn-block" id="sync-to-server-btn">
+                                <i class="fas fa-upload"></i> 로컬 → 서버 (대기 데이터 업로드)
+                            </button>
+                            <p class="help-text small">로컬에 저장된 동기화 대기 데이터를 서버에 전송합니다.</p>
+
+                            <button class="btn btn-warning btn-block" id="force-sync-both-btn">
+                                <i class="fas fa-sync"></i> 양방향 동기화 (전체)
+                            </button>
+                            <p class="help-text small">로컬 → 서버 업로드 후 서버 → 로컬 다운로드를 수행합니다.</p>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h4><i class="fas fa-info-circle"></i> 동기화 정보</h4>
+                        <div class="sync-info">
+                            <div class="info-row">
+                                <span class="info-label">로컬 데이터:</span>
+                                <span id="local-total-count">0개</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">동기화 대기:</span>
+                                <span id="pending-sync-count-info">0개</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">마지막 동기화:</span>
+                                <span id="last-sync-time-info">없음</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h4><i class="fas fa-file-excel"></i> 엑셀 데이터 관리</h4>
+                        <p class="help-text">모든 데이터를 엑셀 파일로 다운로드하거나, 엑셀 파일에서 데이터를 가져올 수 있습니다.</p>
+                        <button class="btn btn-primary btn-block" id="download-excel-btn">
+                            <i class="fas fa-download"></i> 모든 데이터 엑셀 다운로드
+                        </button>
+                        <p class="help-text small">환자, 검진, 검진항목, 검진유형 데이터 (오프라인 임시 저장 포함)</p>
+
+                        <div style="margin-top: 1rem;">
+                            <input type="file" id="upload-excel-input" accept=".xlsx,.xls" style="display: none;">
+                            <button class="btn btn-secondary btn-block" id="upload-excel-btn">
+                                <i class="fas fa-upload"></i> 엑셀에서 데이터 가져오기
+                            </button>
+                            <p class="help-text small">⚠️ 기존 데이터에 추가됩니다. 중복 ID는 건너뜁니다.</p>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h4><i class="fas fa-database"></i> 데이터 관리</h4>
+                        <button class="btn btn-danger btn-block" id="clear-local-data-btn">
+                            <i class="fas fa-trash-alt"></i> 로컬 데이터 전체 삭제
+                        </button>
+                        <p class="help-text small warning">⚠️ 주의: 동기화되지 않은 데이터는 복구할 수 없습니다.</p>
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button class="btn btn-secondary modal-close">닫기</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 로딩 스피너 -->
+        <div id="loading" class="loading-overlay" style="display: none;">
+            <div class="loading-spinner">
+                <i class="fas fa-spinner fa-spin"></i>
+                <p>처리 중...</p>
+            </div>
+        </div>
+
+        <!-- 알림 메시지 -->
+        <div id="notification" class="notification" style="display: none;">
+            <div class="notification-content">
+                <i class="notification-icon"></i>
+                <span class="notification-message"></span>
+                <button class="notification-close">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Service Worker 등록 -->
+    <script src="sw-register.js?v=1.9"></script>
+
+    <!-- 메인 애플리케이션 -->
+    <script src="app.js?v=2.4"></script>
+</body>
+</html>

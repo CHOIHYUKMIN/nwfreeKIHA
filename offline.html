@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>오프라인 - PWA POC</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+        }
+        
+        .offline-container {
+            text-align: center;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 60px 40px;
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            max-width: 500px;
+            width: 90%;
+        }
+        
+        .offline-icon {
+            font-size: 80px;
+            margin-bottom: 30px;
+            animation: pulse 2s infinite;
+        }
+        
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+        
+        p {
+            font-size: 1.2rem;
+            margin-bottom: 30px;
+            line-height: 1.6;
+            opacity: 0.9;
+        }
+        
+        .retry-btn {
+            background: rgba(255, 255, 255, 0.2);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            padding: 15px 30px;
+            border-radius: 25px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+        
+        .retry-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+            border-color: rgba(255, 255, 255, 0.5);
+            transform: translateY(-2px);
+        }
+        
+        .retry-btn:active {
+            transform: translateY(0);
+        }
+        
+        .features {
+            margin-top: 40px;
+            text-align: left;
+        }
+        
+        .features h3 {
+            margin-bottom: 15px;
+            font-size: 1.3rem;
+        }
+        
+        .feature-list {
+            list-style: none;
+        }
+        
+        .feature-list li {
+            margin-bottom: 10px;
+            padding-left: 20px;
+            position: relative;
+        }
+        
+        .feature-list li::before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            color: #4CAF50;
+            font-weight: bold;
+        }
+        
+        .pwa-info {
+            margin-top: 30px;
+            text-align: left;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .pwa-info h3 {
+            margin-bottom: 15px;
+            font-size: 1.3rem;
+            color: #FFD700;
+        }
+        
+        .pwa-info p {
+            margin-bottom: 15px;
+            font-size: 1rem;
+            opacity: 0.9;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+        
+        @media (max-width: 768px) {
+            .offline-container {
+                padding: 40px 20px;
+            }
+            
+            h1 {
+                font-size: 2rem;
+            }
+            
+            .offline-icon {
+                font-size: 60px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="offline-container">
+        <div class="offline-icon">📡</div>
+        <h1>오프라인 상태입니다</h1>
+        <p>인터넷 연결을 확인해주세요.<br>이 앱은 오프라인에서도 기본 기능을 사용할 수 있습니다.</p>
+        
+        <button class="retry-btn" onclick="retryConnection()">연결 재시도</button>
+        
+        <div class="features">
+            <h3>오프라인에서 사용 가능한 기능:</h3>
+            <ul class="feature-list">
+                <li>저장된 데이터 조회</li>
+                <li>새로운 데이터 저장 (IndexedDB)</li>
+                <li>기본 UI 및 스타일</li>
+                <li>앱 기능 탐색</li>
+                <li>PWA 설치 (온라인 상태에서)</li>
+            </ul>
+        </div>
+        
+        <div class="pwa-info">
+            <h3>💡 PWA 설치 팁</h3>
+            <p>이 앱을 PWA로 설치하면 오프라인에서도 더 나은 경험을 제공할 수 있습니다.</p>
+            <ul class="feature-list">
+                <li>홈 화면에서 바로 실행</li>
+                <li>오프라인에서도 기본 기능 사용</li>
+                <li>네이티브 앱과 유사한 경험</li>
+                <li>자동 업데이트 및 동기화</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        function retryConnection() {
+            // 네트워크 상태 확인
+            if (navigator.onLine) {
+                window.location.reload();
+            } else {
+                // 연결이 안된 경우 사용자에게 알림
+                alert('아직 인터넷 연결이 되지 않았습니다. 네트워크 상태를 확인해주세요.');
+            }
+        }
+        
+        // 온라인 상태가 되면 자동으로 새로고침
+        window.addEventListener('online', () => {
+            setTimeout(() => {
+                window.location.reload();
+            }, 1000);
+        });
+        
+        // 주기적으로 연결 상태 확인 (5초마다)
+        setInterval(() => {
+            if (navigator.onLine) {
+                window.location.reload();
+            }
+        }, 5000);
+    </script>
+</body>
+</html>
