@@ -1,15 +1,18 @@
 // Service Worker - PWA POC
-const CACHE_NAME = 'pwa-poc-v7';
-const STATIC_CACHE_NAME = 'pwa-poc-static-v7';
-const DYNAMIC_CACHE_NAME = 'pwa-poc-dynamic-v7';
+const CACHE_NAME = 'pwa-poc-v19';
+const STATIC_CACHE_NAME = 'pwa-poc-static-v19';
+const DYNAMIC_CACHE_NAME = 'pwa-poc-dynamic-v19';
 
 // 캐시할 정적 파일들
 const STATIC_FILES = [
     './',
     './index.html',
     './styles.css',
+    './styles_calendar_report.css',
     './app.js',
     './sw-register.js',
+    './p2p-transfer.js',
+    './p2p-ui-handler.js',
     './manifest.json',
     './offline.html',
     './icons/icon-192x192.svg',
@@ -25,8 +28,11 @@ const NETWORK_FIRST_FILES = [
 // 캐시 우선 전략을 사용할 파일들
 const CACHE_FIRST_FILES = [
     './styles.css',
+    './styles_calendar_report.css',
     './app.js',
-    './sw-register.js'
+    './sw-register.js',
+    './p2p-transfer.js',
+    './p2p-ui-handler.js'
 ];
 
 // Service Worker 설치 이벤트
@@ -53,14 +59,14 @@ self.addEventListener('install', (event) => {
 // Service Worker 활성화 이벤트
 self.addEventListener('activate', (event) => {
     console.log('Service Worker 활성화 시작');
-    
+
     event.waitUntil(
         caches.keys()
             .then(cacheNames => {
                 return Promise.all(
                     cacheNames.map(cacheName => {
                         // 이전 버전의 캐시 삭제
-                        if (cacheName !== STATIC_CACHE_NAME && 
+                        if (cacheName !== STATIC_CACHE_NAME &&
                             cacheName !== DYNAMIC_CACHE_NAME) {
                             console.log('이전 캐시 삭제:', cacheName);
                             return caches.delete(cacheName);
@@ -77,6 +83,16 @@ self.addEventListener('activate', (event) => {
                 console.error('Service Worker 활성화 실패:', error);
             })
     );
+});
+
+// 메시지 이벤트 리스너 (클라이언트로부터 메시지 수신)
+self.addEventListener('message', (event) => {
+    console.log('Service Worker 메시지 수신:', event.data);
+
+    if (event.data && event.data.type === 'SKIP_WAITING') {
+        console.log('⚡ SKIP_WAITING 메시지 수신 - 즉시 활성화');
+        self.skipWaiting();
+    }
 });
 
 // 네트워크 요청 가로채기
@@ -111,10 +127,10 @@ self.addEventListener('fetch', (event) => {
         return;
     }
     
-    // API 요청은 네트워크 우선 전략
+    // API 요청은 캐싱하지 않고 네트워크만 사용 (중요!)
     if (NETWORK_FIRST_FILES.some(api => request.url.includes(api))) {
-        console.log('🌐 API 요청 네트워크 우선 전략:', request.url);
-        event.respondWith(networkFirstStrategy(request));
+        console.log('🌐 API 요청 - 네트워크만 사용 (캐싱 안함):', request.url);
+        // API 요청은 그냥 네트워크로 전달 (캐싱 X)
         return;
     }
     

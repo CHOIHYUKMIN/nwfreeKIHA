@@ -14,6 +14,9 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <!-- SheetJS for Excel export/import -->
     <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <!-- P2P Transfer Module -->
+    <script src="p2p-transfer.js"></script>
+    <script src="p2p-ui-handler.js"></script>
 </head>
 <body>
     <div id="app" class="app-container">
@@ -33,7 +36,7 @@
                         <i class="fas fa-wifi"></i> 온라인
                     </span>
                     <span id="sync-status" class="status-badge">
-                        <i class="fas fa-sync-alt"></i> <span id="sync-status-text">동기화 완료</span>
+                        <i class="fas fa-sync-alt"></i> <span id="sync-status-text">대기 중</span>
                         <small id="sync-time" style="display: block; font-size: 0.75em; opacity: 0.8;"></small>
                     </span>
                     <button class="btn btn-icon" id="settings-btn" title="설정">
@@ -594,6 +597,35 @@
                     </div>
 
                     <div class="settings-section">
+                        <h4><i class="fas fa-share-alt"></i> P2P 데이터 전송 (오프라인)</h4>
+                        <p class="help-text">WebRTC를 이용한 기기 간 직접 데이터 전송입니다. 인터넷 없이도 사용할 수 있습니다.</p>
+
+                        <div class="p2p-transfer-controls" style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                            <button class="btn btn-primary" id="p2p-send-btn" style="flex: 1;">
+                                <i class="fas fa-paper-plane"></i> 데이터 보내기
+                            </button>
+                            <button class="btn btn-success" id="p2p-receive-btn" style="flex: 1;">
+                                <i class="fas fa-download"></i> 데이터 받기
+                            </button>
+                        </div>
+
+                        <div id="p2p-status" class="p2p-status" style="display: none; background: #f8f9fa; padding: 1rem; border-radius: 8px; margin-top: 1rem;">
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                                <i class="fas fa-circle" id="p2p-status-icon" style="font-size: 0.5rem; color: #6c757d;"></i>
+                                <strong id="p2p-status-text">대기 중</strong>
+                            </div>
+                            <div id="p2p-progress" style="display: none;">
+                                <div class="progress-bar" style="background: #e9ecef; border-radius: 4px; height: 8px; overflow: hidden; margin: 0.5rem 0;">
+                                    <div id="p2p-progress-bar" style="background: #4f46e5; height: 100%; width: 0%; transition: width 0.3s;"></div>
+                                </div>
+                                <p id="p2p-progress-text" style="margin: 0; font-size: 0.875rem; color: #6c757d;">0%</p>
+                            </div>
+                        </div>
+
+                        <p class="help-text small">💡 송신: QR 생성 → 수신자 스캔 → Answer QR 스캔 → 전송<br>💡 수신: Offer QR 스캔 → Answer QR 생성 → 송신자 스캔 → 수신</p>
+                    </div>
+
+                    <div class="settings-section">
                         <h4><i class="fas fa-database"></i> 데이터 관리</h4>
                         <button class="btn btn-danger btn-block" id="clear-local-data-btn">
                             <i class="fas fa-trash-alt"></i> 로컬 데이터 전체 삭제
@@ -604,6 +636,73 @@
 
                 <div class="modal-footer">
                     <button class="btn btn-secondary modal-close">닫기</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- P2P 코드 표시 모달 (복사) -->
+        <div id="p2p-qr-modal" class="modal">
+            <div class="modal-content" style="max-width: 600px;">
+                <div class="modal-header">
+                    <h3 id="p2p-qr-title">연결 코드</h3>
+                    <button class="modal-close">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <p id="p2p-qr-instruction" style="margin-bottom: 1rem;">아래 코드를 복사해서 상대방에게 전달하세요</p>
+                    <textarea id="p2p-code-text" readonly
+                        style="width: 100%; height: 150px; padding: 0.75rem; font-family: monospace; font-size: 0.85rem; border: 1px solid #ddd; border-radius: 4px; resize: vertical; background: #f8f9fa; word-break: break-all;">
+                    </textarea>
+                    <div style="margin-top: 1rem; text-align: center;">
+                        <button id="p2p-copy-btn" class="btn btn-primary" style="min-width: 150px;">
+                            <i class="fas fa-copy"></i> 코드 복사
+                        </button>
+                    </div>
+                    <p class="help-text small" style="margin-top: 1rem;">💡 복사한 코드를 문자, 메신저 등으로 상대방에게 전달하세요</p>
+
+                    <!-- Offer 생성한 송신자용: Answer 입력 버튼 -->
+                    <div id="p2p-next-step-offer" style="display: none; margin-top: 1.5rem; padding: 1rem; background: #e3f2fd; border-radius: 4px;">
+                        <p style="margin: 0 0 0.5rem 0; font-weight: 500;">📱 다음 단계:</p>
+                        <p style="margin: 0 0 1rem 0; font-size: 0.9rem;">수신자가 이 코드를 입력하면 Answer 코드를 받게 됩니다. Answer 코드를 받으면 아래 버튼을 클릭하세요.</p>
+                        <button id="p2p-input-answer-btn" class="btn btn-success" style="width: 100%;">
+                            <i class="fas fa-arrow-right"></i> Answer 코드 입력하기
+                        </button>
+                    </div>
+
+                    <!-- Answer 생성한 수신자용: 안내 메시지 -->
+                    <div id="p2p-next-step-answer" style="display: none; margin-top: 1.5rem; padding: 1rem; background: #f1f8e9; border-radius: 4px;">
+                        <p style="margin: 0; font-weight: 500;">✅ 이 코드를 송신자에게 전달하세요</p>
+                        <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem;">송신자가 이 코드를 입력하면 연결이 완료됩니다.</p>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary modal-close">닫기</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- P2P 코드 입력 모달 (붙여넣기) -->
+        <div id="p2p-scan-modal" class="modal">
+            <div class="modal-content" style="max-width: 600px;">
+                <div class="modal-header">
+                    <h3 id="p2p-scan-title">연결 코드 입력</h3>
+                    <button class="modal-close">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <p id="p2p-scan-instruction" style="margin-bottom: 1rem;">상대방으로부터 받은 코드를 붙여넣으세요</p>
+                    <textarea id="p2p-code-input" placeholder="여기에 코드를 붙여넣으세요..."
+                        style="width: 100%; height: 150px; padding: 0.75rem; font-family: monospace; font-size: 0.85rem; border: 1px solid #ddd; border-radius: 4px; resize: vertical;">
+                    </textarea>
+                    <p class="help-text small" style="margin-top: 1rem;">💡 상대방에게서 받은 전체 코드를 복사해서 붙여넣으세요</p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary modal-close">취소</button>
+                    <button id="p2p-paste-confirm-btn" class="btn btn-primary">
+                        <i class="fas fa-check"></i> 확인
+                    </button>
                 </div>
             </div>
         </div>
@@ -632,6 +731,6 @@
     <script src="sw-register.js?v=1.9"></script>
 
     <!-- 메인 애플리케이션 -->
-    <script src="app.js?v=2.4"></script>
+    <script src="app.js?v=3.1"></script>
 </body>
 </html>

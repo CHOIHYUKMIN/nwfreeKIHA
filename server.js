@@ -294,25 +294,76 @@ app.get('/api/patients/:id', async (req, res) => {
 // 환자 등록
 app.post('/api/patients', async (req, res) => {
     try {
-        const { name, birth_date, gender, phone, email, address, emergency_contact } = req.body;
+        const { name, birth_date, gender, phone, email, address, emergency_contact, uuid } = req.body;
 
+        let patient_id = req.body.patient_id;
+        let result;
+
+        // UUID(local_id)가 있으면 기존 환자 확인 (중복 방지)
+        if (uuid) {
+            const checkRequest = pool.request();
+            const existingCheck = await checkRequest
+                .input('uuid', sql.NVarChar, uuid)
+                .query('SELECT * FROM patients WHERE local_id = @uuid');
+
+            if (existingCheck.recordset.length > 0) {
+                // 기존 환자 UPDATE
+                const existing = existingCheck.recordset[0];
+                const updateRequest = pool.request();
+                result = await updateRequest
+                    .input('id', sql.Int, existing.id)
+                    .input('name', sql.NVarChar, name)
+                    .input('birthDate', sql.Date, birth_date)
+                    .input('gender', sql.NChar, gender)
+                    .input('phone', sql.NVarChar, phone)
+                    .input('email', sql.NVarChar, email)
+                    .input('address', sql.NVarChar, address)
+                    .input('emergencyContact', sql.NVarChar, emergency_contact)
+                    .query(`
+                        UPDATE patients
+                        SET name = @name,
+                            birth_date = @birthDate,
+                            gender = @gender,
+                            phone = @phone,
+                            email = @email,
+                            address = @address,
+                            emergency_contact = @emergencyContact,
+                            updated_at = GETDATE()
+                        OUTPUT INSERTED.*
+                        WHERE id = @id
+                    `);
+
+                console.log(`✅ 환자 업데이트 (UUID: ${uuid})`);
+                return res.json({
+                    success: true,
+                    data: result.recordset[0],
+                    patient: result.recordset[0],
+                    message: '환자 정보가 업데이트되었습니다.',
+                    isUpdate: true
+                });
+            }
+        }
+
+        // 신규 환자 INSERT
         // patient_id 자동 생성 (P+년도+3자리 일련번호)
-        const currentYear = new Date().getFullYear();
-        const request = pool.request();
+        if (!patient_id || patient_id.startsWith('TEMP_')) {
+            const currentYear = new Date().getFullYear();
+            const request = pool.request();
 
-        // 해당 연도의 마지막 일련번호 조회
-        const sequenceResult = await request.query(`
-            SELECT MAX(CAST(RIGHT(patient_id, 3) AS INT)) as last_sequence
-            FROM patients
-            WHERE patient_id LIKE 'P${currentYear}%'
-        `);
+            // 해당 연도의 마지막 일련번호 조회
+            const sequenceResult = await request.query(`
+                SELECT MAX(CAST(RIGHT(patient_id, 3) AS INT)) as last_sequence
+                FROM patients
+                WHERE patient_id LIKE 'P${currentYear}%'
+            `);
 
-        const lastSequence = sequenceResult.recordset[0].last_sequence || 0;
-        const newSequence = (lastSequence + 1).toString().padStart(3, '0');
-        const patient_id = `P${currentYear}${newSequence}`;
+            const lastSequence = sequenceResult.recordset[0].last_sequence || 0;
+            const newSequence = (lastSequence + 1).toString().padStart(3, '0');
+            patient_id = `P${currentYear}${newSequence}`;
+        }
 
         const insertRequest = pool.request();
-        const result = await insertRequest
+        result = await insertRequest
             .input('patientId', sql.NVarChar, patient_id)
             .input('name', sql.NVarChar, name)
             .input('birthDate', sql.Date, birth_date)
@@ -321,23 +372,26 @@ app.post('/api/patients', async (req, res) => {
             .input('email', sql.NVarChar, email)
             .input('address', sql.NVarChar, address)
             .input('emergencyContact', sql.NVarChar, emergency_contact)
+            .input('uuid', sql.NVarChar, uuid || null)
             .query(`
-                INSERT INTO patients (patient_id, name, birth_date, gender, phone, email, address, emergency_contact)
+                INSERT INTO patients (patient_id, name, birth_date, gender, phone, email, address, emergency_contact, local_id)
                 OUTPUT INSERTED.*
-                VALUES (@patientId, @name, @birthDate, @gender, @phone, @email, @address, @emergencyContact)
+                VALUES (@patientId, @name, @birthDate, @gender, @phone, @email, @address, @emergencyContact, @uuid)
             `);
 
         const insertedPatient = result.recordset[0];
 
+        console.log(`✅ 환자 등록 (UUID: ${uuid})`);
         res.json({
             success: true,
             data: insertedPatient,
-            patient: insertedPatient, // 호환성을 위해 유지
-            message: '환자가 등록되었습니다.'
+            patient: insertedPatient,
+            message: '환자가 등록되었습니다.',
+            isUpdate: false
         });
     } catch (err) {
-        console.error('환자 등록 실패:', err.message);
-        res.status(500).json({ success: false, error: '환자 등록 실패' });
+        console.error('환자 등록/업데이트 실패:', err.message);
+        res.status(500).json({ success: false, error: '환자 등록/업데이트 실패' });
     }
 });
 
@@ -465,26 +519,75 @@ app.post('/api/checkups', async (req, res) => {
     try {
         const {
             patient_id, checkup_type_id, checkup_date,
-            checkup_time, doctor_name, notes
+            checkup_time, doctor_name, notes, uuid
         } = req.body;
 
+        let checkup_no = req.body.checkup_no;
+        let result;
+
+        // UUID(local_id)가 있으면 기존 검진 확인 (중복 방지)
+        if (uuid) {
+            const checkRequest = pool.request();
+            const existingCheck = await checkRequest
+                .input('uuid', sql.NVarChar, uuid)
+                .query('SELECT * FROM checkups WHERE local_id = @uuid');
+
+            if (existingCheck.recordset.length > 0) {
+                // 기존 검진 UPDATE
+                const existing = existingCheck.recordset[0];
+                const updateRequest = pool.request();
+                result = await updateRequest
+                    .input('id', sql.Int, existing.id)
+                    .input('patientId', sql.Int, patient_id)
+                    .input('checkupTypeId', sql.Int, checkup_type_id)
+                    .input('checkupDate', sql.Date, checkup_date)
+                    .input('checkupTime', sql.NVarChar, checkup_time)
+                    .input('doctorName', sql.NVarChar, doctor_name)
+                    .input('notes', sql.NVarChar, notes)
+                    .query(`
+                        UPDATE checkups
+                        SET patient_id = @patientId,
+                            checkup_type_id = @checkupTypeId,
+                            checkup_date = @checkupDate,
+                            checkup_time = ${checkup_time ? `CAST(@checkupTime AS TIME)` : 'NULL'},
+                            doctor_name = @doctorName,
+                            notes = @notes,
+                            updated_at = GETDATE()
+                        OUTPUT INSERTED.*
+                        WHERE id = @id
+                    `);
+
+                console.log(`✅ 검진 업데이트 (UUID: ${uuid})`);
+                return res.json({
+                    success: true,
+                    data: result.recordset[0],
+                    checkup: result.recordset[0],
+                    message: '검진 정보가 업데이트되었습니다.',
+                    isUpdate: true
+                });
+            }
+        }
+
+        // 신규 검진 INSERT
         // checkup_no 자동 생성 (CHK+년도+일련번호)
-        const currentYear = new Date().getFullYear();
-        const request = pool.request();
+        if (!checkup_no || checkup_no.startsWith('TEMP_')) {
+            const currentYear = new Date().getFullYear();
+            const request = pool.request();
 
-        // 해당 연도의 마지막 일련번호 조회
-        const sequenceResult = await request.query(`
-            SELECT MAX(CAST(RIGHT(checkup_no, 3) AS INT)) as last_sequence
-            FROM checkups
-            WHERE checkup_no LIKE 'CHK${currentYear}%'
-        `);
+            // 해당 연도의 마지막 일련번호 조회
+            const sequenceResult = await request.query(`
+                SELECT MAX(CAST(RIGHT(checkup_no, 3) AS INT)) as last_sequence
+                FROM checkups
+                WHERE checkup_no LIKE 'CHK${currentYear}%'
+            `);
 
-        const lastSequence = sequenceResult.recordset[0].last_sequence || 0;
-        const newSequence = (lastSequence + 1).toString().padStart(3, '0');
-        const checkup_no = `CHK${currentYear}${newSequence}`;
+            const lastSequence = sequenceResult.recordset[0].last_sequence || 0;
+            const newSequence = (lastSequence + 1).toString().padStart(3, '0');
+            checkup_no = `CHK${currentYear}${newSequence}`;
+        }
 
         const insertRequest = pool.request();
-        const result = await insertRequest
+        result = await insertRequest
             .input('checkupNo', sql.NVarChar, checkup_no)
             .input('patientId', sql.Int, patient_id)
             .input('checkupTypeId', sql.Int, checkup_type_id)
@@ -492,25 +595,28 @@ app.post('/api/checkups', async (req, res) => {
             .input('checkupTime', sql.NVarChar, checkup_time)
             .input('doctorName', sql.NVarChar, doctor_name)
             .input('notes', sql.NVarChar, notes)
+            .input('uuid', sql.NVarChar, uuid || null)
             .query(`
-                INSERT INTO checkups (checkup_no, patient_id, checkup_type_id, checkup_date, checkup_time, doctor_name, notes)
+                INSERT INTO checkups (checkup_no, patient_id, checkup_type_id, checkup_date, checkup_time, doctor_name, notes, local_id)
                 OUTPUT INSERTED.*
                 VALUES (@checkupNo, @patientId, @checkupTypeId, @checkupDate,
                     ${checkup_time ? `CAST(@checkupTime AS TIME)` : 'NULL'},
-                    @doctorName, @notes)
+                    @doctorName, @notes, @uuid)
             `);
 
         const insertedCheckup = result.recordset[0];
 
+        console.log(`✅ 검진 등록 (UUID: ${uuid})`);
         res.json({
             success: true,
             data: insertedCheckup,
-            checkup: insertedCheckup, // 호환성을 위해 유지
-            message: '검진이 예약되었습니다.'
+            checkup: insertedCheckup,
+            message: '검진이 예약되었습니다.',
+            isUpdate: false
         });
     } catch (err) {
-        console.error('검진 예약 실패:', err.message);
-        res.status(500).json({ success: false, error: '검진 예약 실패' });
+        console.error('검진 예약/업데이트 실패:', err.message);
+        res.status(500).json({ success: false, error: '검진 예약/업데이트 실패' });
     }
 });
 
@@ -534,23 +640,68 @@ app.post('/api/checkups/:id/items', async (req, res) => {
 
             let successCount = 0;
 
-            // 새 항목들 삽입
+            // 새 항목들 삽입 (UUID 포함)
             for (const item of items) {
                 try {
                     const itemRequest = new sql.Request(transaction);
-                    await itemRequest
-                        .input('checkupId', sql.Int, id)
-                        .input('itemCategory', sql.NVarChar, item.item_category)
-                        .input('itemName', sql.NVarChar, item.item_name)
-                        .input('itemValue', sql.NVarChar, item.item_value)
-                        .input('referenceRange', sql.NVarChar, item.reference_range)
-                        .input('unit', sql.NVarChar, item.unit)
-                        .input('status', sql.NVarChar, item.status)
-                        .input('notes', sql.NVarChar, item.notes)
-                        .query(`
-                            INSERT INTO checkup_items (checkup_id, item_category, item_name, item_value, reference_range, unit, status, notes, measured_at)
-                            VALUES (@checkupId, @itemCategory, @itemName, @itemValue, @referenceRange, @unit, @status, @notes, GETDATE())
-                        `);
+
+                    // UUID가 있으면 기존 항목 확인 (중복 방지)
+                    let existingItem = null;
+                    if (item.uuid) {
+                        const checkRequest = new sql.Request(transaction);
+                        const existingCheck = await checkRequest
+                            .input('uuid', sql.NVarChar, item.uuid)
+                            .query('SELECT * FROM checkup_items WHERE local_id = @uuid');
+
+                        if (existingCheck.recordset.length > 0) {
+                            existingItem = existingCheck.recordset[0];
+                        }
+                    }
+
+                    if (existingItem) {
+                        // 기존 항목 UPDATE
+                        await itemRequest
+                            .input('id', sql.Int, existingItem.id)
+                            .input('checkupId', sql.Int, id)
+                            .input('itemCategory', sql.NVarChar, item.item_category)
+                            .input('itemName', sql.NVarChar, item.item_name)
+                            .input('itemValue', sql.NVarChar, item.item_value)
+                            .input('referenceRange', sql.NVarChar, item.reference_range)
+                            .input('unit', sql.NVarChar, item.unit)
+                            .input('status', sql.NVarChar, item.status)
+                            .input('notes', sql.NVarChar, item.notes)
+                            .query(`
+                                UPDATE checkup_items
+                                SET checkup_id = @checkupId,
+                                    item_category = @itemCategory,
+                                    item_name = @itemName,
+                                    item_value = @itemValue,
+                                    reference_range = @referenceRange,
+                                    unit = @unit,
+                                    status = @status,
+                                    notes = @notes,
+                                    measured_at = GETDATE()
+                                WHERE id = @id
+                            `);
+                        console.log(`✅ 검진항목 업데이트 (UUID: ${item.uuid})`);
+                    } else {
+                        // 신규 항목 INSERT
+                        await itemRequest
+                            .input('checkupId', sql.Int, id)
+                            .input('itemCategory', sql.NVarChar, item.item_category)
+                            .input('itemName', sql.NVarChar, item.item_name)
+                            .input('itemValue', sql.NVarChar, item.item_value)
+                            .input('referenceRange', sql.NVarChar, item.reference_range)
+                            .input('unit', sql.NVarChar, item.unit)
+                            .input('status', sql.NVarChar, item.status)
+                            .input('notes', sql.NVarChar, item.notes)
+                            .input('uuid', sql.NVarChar, item.uuid || null)
+                            .query(`
+                                INSERT INTO checkup_items (checkup_id, item_category, item_name, item_value, reference_range, unit, status, notes, measured_at, local_id)
+                                VALUES (@checkupId, @itemCategory, @itemName, @itemValue, @referenceRange, @unit, @status, @notes, GETDATE(), @uuid)
+                            `);
+                        console.log(`✅ 검진항목 등록 (UUID: ${item.uuid})`);
+                    }
                     successCount++;
                 } catch (itemErr) {
                     console.error('검진 항목 저장 실패:', itemErr.message);

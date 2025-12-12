@@ -2,13 +2,13 @@
 class HealthCheckupApp {
     constructor() {
         // 버전 정보 (메이저.마이너)
-        this.VERSION = '2.5';
+        this.VERSION = '3.1';
         // 소스 적용일시
-        this.VERSION_DATE = '2025-10-27 17:10:00';
+        this.VERSION_DATE = '2025-10-29 19:00:00';
 
         this.db = null;
         this.dbName = 'HealthCheckupDB';
-        this.dbVersion = 5; // 버전 업그레이드: checkupTypes에 sync_status 인덱스 추가
+        this.dbVersion = 6; // 버전 업그레이드: patients, checkups에 uuid 인덱스 추가 (중복 방지)
         this.isOnline = navigator.onLine;
         this.apiBaseUrl = '/api';
         this.currentCheckup = null;
@@ -69,20 +69,37 @@ class HealthCheckupApp {
         this.setupNetworkListeners();
         this.updateVersionDisplay();
 
+        // 동기화 상태 초기화
+        this.updateSyncStatusText('초기화 중');
+
         // 실제 서버 연결 상태 확인
-        if (navigator.onLine) {
-            this.isOnline = await this.checkServerConnection();
-        } else {
+        try {
+            if (navigator.onLine) {
+                this.isOnline = await this.checkServerConnection();
+            } else {
+                this.isOnline = false;
+            }
+        } catch (error) {
+            console.warn('⚠️ 서버 연결 확인 실패, 오프라인 모드로 시작:', error);
             this.isOnline = false;
         }
         this.updateConnectionStatus();
 
         // 앱 시작 시 동기화 (순서 중요)
         if (this.isOnline) {
-            // 1. 오프라인 데이터 먼저 업로드
-            await this.syncOfflineRequests();
-            // 2. 서버 데이터 다운로드
-            await this.performFullDataSync();
+            this.updateSyncStatusText('동기화 중');
+            try {
+                // 1. 오프라인 데이터 먼저 업로드
+                await this.syncOfflineRequests();
+                // 2. 서버 데이터 다운로드
+                await this.performFullDataSync();
+            } catch (error) {
+                console.error('❌ 초기 동기화 실패:', error);
+                this.updateSyncStatusText('동기화 실패');
+                // 동기화 실패해도 앱은 계속 실행
+            }
+        } else {
+            this.updateSyncStatusText('오프라인');
         }
 
         this.loadDashboard();
@@ -93,6 +110,12 @@ class HealthCheckupApp {
         // 자동 동기화 시작
         if (this.autoSyncEnabled) {
             this.startPeriodicSync();
+        }
+
+        // P2P UI 핸들러 초기화
+        if (window.P2PUIHandler) {
+            this.p2pUIHandler = new P2PUIHandler(this);
+            console.log('✅ P2P 전송 기능 초기화됨');
         }
 
         console.log(`✅ 건강검진 시스템이 초기화되었습니다. (버전 v${this.VERSION})`);
@@ -235,6 +258,29 @@ class HealthCheckupApp {
                     if (!itemsStore.indexNames.contains('sync_status')) {
                         itemsStore.createIndex('sync_status', 'sync_status', { unique: false });
                         console.log('✅ checkupItems에 sync_status 인덱스 추가 완료');
+                    }
+                }
+
+                // 버전 6 업그레이드: uuid 인덱스 추가 (중복 방지)
+                if (oldVersion < 6) {
+                    const transaction = event.target.transaction;
+
+                    // patients 스토어에 uuid 인덱스 추가
+                    if (db.objectStoreNames.contains(this.stores.patients)) {
+                        const patientsStore = transaction.objectStore(this.stores.patients);
+                        if (!patientsStore.indexNames.contains('uuid')) {
+                            patientsStore.createIndex('uuid', 'uuid', { unique: true });
+                            console.log('✅ patients에 uuid 인덱스 추가 완료');
+                        }
+                    }
+
+                    // checkups 스토어에 uuid 인덱스 추가
+                    if (db.objectStoreNames.contains(this.stores.checkups)) {
+                        const checkupsStore = transaction.objectStore(this.stores.checkups);
+                        if (!checkupsStore.indexNames.contains('uuid')) {
+                            checkupsStore.createIndex('uuid', 'uuid', { unique: true });
+                            console.log('✅ checkups에 uuid 인덱스 추가 완료');
+                        }
                     }
                 }
 
@@ -482,6 +528,7 @@ class HealthCheckupApp {
                     // 온라인 상태가 되면 동기화 (순서 중요: 오프라인 데이터 업로드 → 서버 데이터 다운로드)
                     setTimeout(async () => {
                         this.showLoading(true, '양방향 동기화 중...');
+                        this.updateSyncStatusText('동기화 중');
                         console.log('🔄 온라인 복귀 - 자동 동기화 시작...');
 
                         try {
@@ -495,6 +542,7 @@ class HealthCheckupApp {
                             this.showNotification('모든 데이터가 동기화되었습니다.', 'success');
                         } catch (error) {
                             console.error('❌ 자동 동기화 실패:', error);
+                            this.updateSyncStatusText('동기화 실패');
                             this.showNotification('동기화 중 오류가 발생했습니다.', 'error');
                         } finally {
                             this.showLoading(false);
@@ -502,9 +550,11 @@ class HealthCheckupApp {
                     }, 1000);
                 } else {
                     console.log('ℹ️ 자동 동기화가 비활성화되어 있습니다. 수동으로 동기화해주세요.');
+                    this.updateSyncStatusText('대기 중');
                     this.showNotification('온라인 상태입니다. 수동 동기화를 원하시면 동기화 버튼을 클릭하세요.', 'info');
                 }
             } else {
+                this.updateSyncStatusText('서버 연결 실패');
                 this.showNotification('네트워크에는 연결되었지만 서버에 접근할 수 없습니다.', 'warning');
             }
         });
@@ -515,16 +565,23 @@ class HealthCheckupApp {
             this.showNotification('오프라인 모드입니다.', 'warning');
         });
 
-        // 주기적으로 서버 연결 상태 확인 (30초마다)
+        // 주기적으로 서버 연결 상태 확인 (10초마다 - 빠른 응답을 위해 단축)
         setInterval(async () => {
             if (navigator.onLine) {
                 const isReallyOnline = await this.checkServerConnection();
                 if (this.isOnline !== isReallyOnline) {
                     this.isOnline = isReallyOnline;
                     this.updateConnectionStatus();
+
+                    // 상태 변경 시 알림
+                    if (isReallyOnline) {
+                        this.showNotification('서버 연결이 복구되었습니다.', 'success');
+                    } else {
+                        this.showNotification('서버 연결이 끊어졌습니다. 오프라인 모드로 전환합니다.', 'warning');
+                    }
                 }
             }
-        }, 30000);
+        }, 10000);
     }
 
     updateConnectionStatus() {
@@ -536,6 +593,8 @@ class HealthCheckupApp {
             } else {
                 statusBadge.innerHTML = '<i class=\"fas fa-wifi-slash\"></i> 오프라인';
                 statusBadge.className = 'status-badge offline';
+                // 오프라인 상태일 때 동기화 상태도 업데이트
+                this.updateSyncStatusText('오프라인');
             }
         }
     }
@@ -577,7 +636,9 @@ class HealthCheckupApp {
 
     async loadDashboard() {
         try {
-            // 온라인 모드: 서버에서 데이터 가져오기
+            let useOfflineData = !this.isOnline;
+
+            // 온라인 모드: 서버에서 데이터 가져오기 시도
             if (this.isOnline) {
                 try {
                     const stats = await this.fetchAPI('/dashboard/stats');
@@ -589,37 +650,40 @@ class HealthCheckupApp {
                     if (recentCheckups.success) {
                         this.displayRecentCheckups(recentCheckups.data);
                     }
-                    return;
+                    return; // 성공 시 여기서 종료
                 } catch (error) {
-                    console.warn('온라인 대시보드 로드 실패, 오프라인 데이터 사용:', error);
+                    console.warn('⚠️ 온라인 대시보드 로드 실패, 오프라인 데이터로 전환:', error);
+                    useOfflineData = true;
                 }
             }
 
-            // 오프라인 모드: IndexedDB에서 데이터 가져오기
-            console.log('📊 오프라인 모드: IndexedDB에서 대시보드 데이터 로드');
+            // 오프라인 또는 API 실패 시: IndexedDB에서 데이터 가져오기
+            if (useOfflineData) {
+                console.log('📊 오프라인 모드: IndexedDB에서 대시보드 데이터 로드');
 
-            const patients = await this.getPatientsFromIndexedDB();
-            const checkups = await this.getCheckupsFromIndexedDB();
+                const patients = await this.getPatientsFromIndexedDB();
+                const checkups = await this.getCheckupsFromIndexedDB();
 
-            // 통계 계산
-            const today = new Date().toISOString().split('T')[0];
-            const todayCheckups = checkups.filter(c => c.checkup_date?.startsWith(today));
-            const inProgressCheckups = checkups.filter(c => c.status === 'in_progress');
-            const completedCheckups = checkups.filter(c => c.status === 'completed');
+                // 통계 계산
+                const today = new Date().toISOString().split('T')[0];
+                const todayCheckups = checkups.filter(c => c.checkup_date?.startsWith(today));
+                const inProgressCheckups = checkups.filter(c => c.status === 'in_progress');
+                const completedCheckups = checkups.filter(c => c.status === 'completed');
 
-            this.updateDashboardStats({
-                total_patients: patients.length,
-                today_checkups: todayCheckups.length,
-                in_progress_checkups: inProgressCheckups.length,
-                completed_checkups: completedCheckups.length
-            });
+                this.updateDashboardStats({
+                    total_patients: patients.length,
+                    today_checkups: todayCheckups.length,
+                    in_progress_checkups: inProgressCheckups.length,
+                    completed_checkups: completedCheckups.length
+                });
 
-            // 최근 검진 5개 표시
-            const recentCheckups = checkups
-                .sort((a, b) => new Date(b.checkup_date) - new Date(a.checkup_date))
-                .slice(0, 5);
+                // 최근 검진 5개 표시
+                const recentCheckups = checkups
+                    .sort((a, b) => new Date(b.checkup_date) - new Date(a.checkup_date))
+                    .slice(0, 5);
 
-            this.displayRecentCheckups(recentCheckups);
+                this.displayRecentCheckups(recentCheckups);
+            }
 
         } catch (error) {
             console.error('대시보드 로드 실패:', error);
@@ -1051,6 +1115,12 @@ class HealthCheckupApp {
         const formData = new FormData(form);
         const patientData = Object.fromEntries(formData.entries());
 
+        // UUID 생성 (온라인/오프라인 공통)
+        if (!patientData.uuid) {
+            patientData.uuid = this.generateUUID();
+            console.log(`🔑 환자 UUID 생성: ${patientData.uuid}`);
+        }
+
         try {
             this.showLoading(true);
 
@@ -1287,15 +1357,17 @@ class HealthCheckupApp {
         } catch (error) {
             console.error('API 요청 실패:', error);
 
-            // 네트워크 오류가 발생하면 오프라인 상태로 업데이트
+            // 네트워크 오류가 발생하면 오프라인 상태로 전환
             if (error.message.includes('Failed to fetch') ||
                 error.message.includes('ERR_INTERNET_DISCONNECTED') ||
                 error.message.includes('ERR_NETWORK') ||
                 !navigator.onLine) {
 
+                // 오프라인 상태로 전환 (주기적 체크에서 자동 복구됨)
                 if (this.isOnline) {
                     this.isOnline = false;
                     this.updateConnectionStatus();
+                    console.log('⚠️ API 호출 실패 - 오프라인 모드로 전환 (10초마다 자동 재연결 시도)');
                 }
 
                 // POST/PUT 요청인 경우 오프라인 큐에 저장
@@ -1708,6 +1780,21 @@ class HealthCheckupApp {
     }
 
     // 임시키 생성
+    // UUID 생성 (전역 고유 ID)
+    generateUUID() {
+        // crypto.randomUUID()가 지원되면 사용, 아니면 폴리필
+        if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+            return crypto.randomUUID();
+        } else {
+            // 폴리필: UUID v4 형식
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0;
+                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+    }
+
     generateTempId(type) {
         const timestamp = Date.now();
         const random = Math.random().toString(36).substr(2, 9);
@@ -1734,11 +1821,17 @@ class HealthCheckupApp {
                 offline_timestamp: new Date().toISOString()
             };
 
-            // 신규 등록의 경우 임시키 생성
+            // 신규 등록의 경우 임시키 + UUID 생성
             if (action === 'create') {
                 const tempId = this.generateTempId(storeName);
                 offlineData.temp_id = tempId;
                 offlineData.id = tempId; // IndexedDB keyPath용
+
+                // UUID 생성 (전역 고유 ID - 중복 방지)
+                if (!offlineData.uuid) {
+                    offlineData.uuid = this.generateUUID();
+                    console.log(`🔑 UUID 생성: ${offlineData.uuid}`);
+                }
 
                 // 환자 등록의 경우 임시 patient_id 생성
                 if (storeName === this.stores.patients) {
@@ -1902,7 +1995,7 @@ class HealthCheckupApp {
         }
     }
 
-    // 동기화 시간 업데이트
+    // 동기화 시간 업데이트 (서버와 실제 동기화 성공 시에만 호출)
     updateSyncTime() {
         const syncTimeEl = document.getElementById('sync-time');
         const syncStatusText = document.getElementById('sync-status-text');
@@ -1922,6 +2015,14 @@ class HealthCheckupApp {
 
         if (syncStatusText) {
             syncStatusText.textContent = '동기화 완료';
+        }
+    }
+
+    // 동기화 상태 텍스트만 업데이트 (시간 정보는 업데이트하지 않음)
+    updateSyncStatusText(statusText) {
+        const syncStatusText = document.getElementById('sync-status-text');
+        if (syncStatusText) {
+            syncStatusText.textContent = statusText;
         }
     }
 
@@ -2588,10 +2689,17 @@ class HealthCheckupApp {
                     // 임시 ID 또는 새 항목의 경우 고유 ID 생성
                     if (isTempCheckup || !card.dataset.itemId || card.dataset.itemId === 'new') {
                         itemData.id = `temp_item_${Date.now()}_${Math.random().toString(36).substr(2, 9)}_${index}`;
+                        itemData.uuid = this.generateUUID();  // ⭐ UUID 생성
                         itemData.sync_status = 'pending';
                         itemData.action = 'create'; // 동기화 시 필요한 액션 타입
+                        console.log(`🔑 검진항목 UUID 생성: ${itemData.uuid}`);
                     } else {
                         itemData.id = parseInt(card.dataset.itemId);
+                        // 기존 항목의 경우 UUID가 없으면 생성
+                        if (!card.dataset.uuid) {
+                            itemData.uuid = this.generateUUID();
+                            console.log(`🔑 기존 검진항목에 UUID 생성: ${itemData.uuid}`);
+                        }
                     }
                     items.push(itemData);
                 }
@@ -2731,14 +2839,14 @@ class HealthCheckupApp {
                 } else {
                     // 온라인 상태에서 저장됨
                     this.showNotification('검진 결과가 저장되었습니다.', 'success');
+                }
 
-                    // 저장 후 검진 상세 정보 다시 로드
-                    await this.showCheckupDetail(this.currentCheckup.checkup.id);
+                // 저장 후 검진 상세 정보 다시 로드 (오프라인/온라인 공통)
+                await this.showCheckupDetail(this.currentCheckup.checkup.id);
 
-                    // 검진 목록도 갱신
-                    if (this.currentSection === 'checkups') {
-                        this.loadCheckups();
-                    }
+                // 검진 목록도 갱신 (오프라인/온라인 공통)
+                if (this.currentSection === 'checkups') {
+                    this.loadCheckups();
                 }
             } else {
                 throw new Error(response.error || '검진 결과 저장에 실패했습니다.');
@@ -2934,6 +3042,12 @@ class HealthCheckupApp {
         const formData = new FormData(e.target);
         const checkupData = Object.fromEntries(formData.entries());
 
+        // UUID 생성 (온라인/오프라인 공통)
+        if (!checkupData.uuid) {
+            checkupData.uuid = this.generateUUID();
+            console.log(`🔑 검진 UUID 생성: ${checkupData.uuid}`);
+        }
+
         try {
             this.showLoading(true);
 
@@ -2956,7 +3070,8 @@ class HealthCheckupApp {
                 type_name: checkupData.type_name,
                 isTempPatient,
                 tempId,
-                isOnline: this.isOnline
+                isOnline: this.isOnline,
+                uuid: checkupData.uuid
             });
 
             // 온라인 상태이고 실제 환자 ID인 경우 API 시도
@@ -3020,10 +3135,12 @@ class HealthCheckupApp {
 
     // 오프라인 요청들을 동기화
     // 완전한 양방향 동기화 (임시키 → 실제키)
-    async syncOfflineRequests() {
+    async syncOfflineRequests(options = {}) {
+        const { silent = false, refreshView = true } = options;
+
         if (!this.isOnline) {
             console.log('오프라인 상태로 동기화를 건너뜁니다.');
-            return;
+            return false;
         }
 
         console.log('🔄 양방향 동기화 시작...');
@@ -3048,29 +3165,38 @@ class HealthCheckupApp {
             totalSynced += syncedLegacy;
 
             // 동기화 완료 후 화면 갱신
-            this.refreshCurrentView();
+            if (refreshView) {
+                this.refreshCurrentView();
+            }
 
             console.log('✅ 양방향 동기화 완료');
-            if (totalSynced > 0) {
+            if (!silent && totalSynced > 0) {
                 this.showNotification(`${totalSynced}개의 오프라인 데이터가 동기화되었습니다.`, 'success');
             }
 
+            return true; // 성공
+
         } catch (error) {
             console.error('❌ 동기화 중 오류 발생:', error);
-            this.showNotification('일부 데이터 동기화에 실패했습니다.', 'warning');
+            if (!silent) {
+                this.showNotification('일부 데이터 동기화에 실패했습니다.', 'warning');
+            }
+            return false; // 실패
         }
     }
 
     // 특정 스토어의 동기화 대상 데이터 처리
     async syncPendingData(storeName, apiEndpoint) {
+        console.log(`🔍 ${storeName} 동기화 대상 데이터 검색 중...`);
         const pendingData = await this.getPendingSyncData(storeName);
+        console.log(`   📊 발견된 pending 데이터: ${pendingData.length}개`);
 
         if (pendingData.length === 0) {
             console.log(`📭 ${storeName}: 동기화 대상 없음`);
             return 0;
         }
 
-        console.log(`📤 ${storeName}: ${pendingData.length}개 데이터 동기화 중...`);
+        console.log(`🔄 ${storeName}: ${pendingData.length}개 데이터 동기화 시작...`);
         let syncedCount = 0;
 
         for (const data of pendingData) {
@@ -3198,6 +3324,15 @@ class HealthCheckupApp {
                 // 임시키를 실제키로 교체
                 await this.updateSyncedData(storeName, data.id, syncedData);
                 console.log(`✅ ${storeName} 생성 동기화: ${data.temp_id} → ID:${result.data.id}`);
+
+                // 검진 동기화가 완료되었으면, 해당 검진 항목들의 checkup_id도 업데이트
+                if (storeName === this.stores.checkups && String(data.id).startsWith('temp_')) {
+                    try {
+                        await this.updateCheckupItemsCheckupId(data.id, result.data.id);
+                    } catch (error) {
+                        console.warn(`⚠️ 검진 항목 checkup_id 업데이트 실패:`, error);
+                    }
+                }
             }
         } else {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -3238,6 +3373,57 @@ class HealthCheckupApp {
             };
 
             request.onerror = () => resolve(null);
+        });
+    }
+
+    // 검진 항목들의 checkup_id를 임시 ID에서 실제 ID로 업데이트
+    async updateCheckupItemsCheckupId(tempCheckupId, realCheckupId) {
+        return new Promise((resolve, reject) => {
+            if (!this.db) {
+                reject(new Error('IndexedDB not initialized'));
+                return;
+            }
+
+            const transaction = this.db.transaction([this.stores.checkupItems], 'readwrite');
+            const store = transaction.objectStore(this.stores.checkupItems);
+            const index = store.index('checkup_id');
+
+            let updatedCount = 0;
+
+            transaction.oncomplete = () => {
+                if (updatedCount > 0) {
+                    console.log(`✅ 검진 항목 ${updatedCount}개의 checkup_id 업데이트 완료: ${tempCheckupId} → ${realCheckupId}`);
+                }
+                resolve(updatedCount);
+            };
+
+            transaction.onerror = () => {
+                console.error(`❌ 검진 항목 checkup_id 업데이트 실패:`, transaction.error);
+                reject(transaction.error);
+            };
+
+            // 임시 checkup_id를 가진 모든 항목 찾기
+            const cursorRequest = index.openCursor(IDBKeyRange.only(tempCheckupId));
+
+            cursorRequest.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (cursor) {
+                    const item = cursor.value;
+                    item.checkup_id = realCheckupId;
+
+                    const updateRequest = cursor.update(item);
+                    updateRequest.onsuccess = () => {
+                        updatedCount++;
+                        console.log(`🔄 검진 항목 업데이트: ${item.item_name} (checkup_id: ${tempCheckupId} → ${realCheckupId})`);
+                    };
+
+                    cursor.continue();
+                }
+            };
+
+            cursorRequest.onerror = () => {
+                console.error(`❌ 검진 항목 조회 실패:`, cursorRequest.error);
+            };
         });
     }
 
@@ -3533,9 +3719,10 @@ class HealthCheckupApp {
 
         try {
             this.showLoading(true);
+            this.updateSyncStatusText('동기화 중');
             console.log('🔄 서버 → 로컬 수동 동기화 시작...');
 
-            // 전체 데이터 동기화 수행
+            // 전체 데이터 동기화 수행 (성공 시 updateSyncTime() 호출됨)
             await this.performFullDataSync();
 
             this.showNotification('서버 데이터를 로컬에 저장했습니다.', 'success');
@@ -3543,6 +3730,7 @@ class HealthCheckupApp {
 
         } catch (error) {
             console.error('서버 → 로컬 동기화 실패:', error);
+            this.updateSyncStatusText('동기화 실패');
             this.showNotification('서버 동기화에 실패했습니다.', 'error');
         } finally {
             this.showLoading(false);
@@ -3558,6 +3746,7 @@ class HealthCheckupApp {
 
         try {
             this.showLoading(true);
+            this.updateSyncStatusText('동기화 중');
             console.log('🔄 로컬 → 서버 수동 동기화 시작...');
 
             // 동기화 대기 중인 데이터 수집
@@ -3569,11 +3758,13 @@ class HealthCheckupApp {
 
             if (pendingPatients.length === 0 && pendingCheckups.length === 0) {
                 this.showNotification('동기화할 데이터가 없습니다.', 'info');
+                this.updateSyncStatusText('대기 중');
                 this.showLoading(false);
                 return;
             }
 
             if (!confirm(`${pendingPatients.length + pendingCheckups.length}개의 데이터를 서버에 업로드합니다.\n계속하시겠습니까?`)) {
+                this.updateSyncStatusText('대기 중');
                 this.showLoading(false);
                 return;
             }
@@ -3629,9 +3820,13 @@ class HealthCheckupApp {
             }
 
             if (successCount > 0) {
+                this.updateSyncTime(); // 동기화 완료 시간 업데이트
                 this.showNotification(`${successCount}개 데이터가 서버에 동기화되었습니다.`, 'success');
             }
             if (errorCount > 0) {
+                if (successCount === 0) {
+                    this.updateSyncStatusText('동기화 실패');
+                }
                 this.showNotification(`${errorCount}개 데이터 동기화에 실패했습니다.`, 'warning');
             }
 
@@ -3640,6 +3835,7 @@ class HealthCheckupApp {
 
         } catch (error) {
             console.error('로컬 → 서버 동기화 실패:', error);
+            this.updateSyncStatusText('동기화 실패');
             this.showNotification('서버 업로드에 실패했습니다.', 'error');
         } finally {
             this.showLoading(false);
@@ -3659,6 +3855,7 @@ class HealthCheckupApp {
 
         try {
             this.showLoading(true, '양방향 동기화 중...');
+            this.updateSyncStatusText('동기화 중');
 
             // 1단계: 로컬 → 서버 (오프라인 데이터 업로드)
             console.log('🔄 1단계: 로컬 → 서버 동기화');
@@ -3666,12 +3863,13 @@ class HealthCheckupApp {
 
             // 2단계: 서버 → 로컬 (전체 데이터 다운로드)
             console.log('🔄 2단계: 서버 → 로컬 동기화');
-            await this.performFullDataSync();
+            await this.performFullDataSync(); // 성공 시 updateSyncTime() 호출됨
 
             this.showNotification('모든 데이터가 동기화되었습니다.', 'success');
 
         } catch (error) {
             console.error('양방향 동기화 실패:', error);
+            this.updateSyncStatusText('동기화 실패');
             this.showNotification('양방향 동기화에 실패했습니다.', 'error');
         } finally {
             this.showLoading(false);
@@ -4114,16 +4312,22 @@ class HealthCheckupApp {
         try {
             this.showLoading(true);
 
-            // IndexedDB에서 모든 데이터 가져오기
+            // XLSX 라이브러리 로드 확인
+            if (typeof XLSX === 'undefined') {
+                this.showLoading(false);
+                this.showNotification('엑셀 라이브러리가 로드되지 않았습니다. 페이지를 새로고침해주세요.', 'error');
+                console.error('❌ XLSX 라이브러리가 로드되지 않았습니다.');
+                return;
+            }
+
+            // IndexedDB에서 환자, 검진, 검진항목 데이터 가져오기
             const patients = await this.getAllFromStore(this.stores.patients);
             const checkups = await this.getAllFromStore(this.stores.checkups);
-            const checkupTypes = await this.getAllFromStore(this.stores.checkupTypes);
             const checkupItems = await this.getAllFromStore(this.stores.checkupItems);
 
             console.log('📥 엑셀 다운로드 데이터:', {
                 patients: patients.length,
                 checkups: checkups.length,
-                checkupTypes: checkupTypes.length,
                 checkupItems: checkupItems.length
             });
 
@@ -4133,6 +4337,7 @@ class HealthCheckupApp {
             // 환자 데이터 시트
             const patientsWS = XLSX.utils.json_to_sheet(patients.map(p => ({
                 'ID': p.id,
+                'UUID': p.uuid || '',  // ⭐ UUID 추가 (중복 방지)
                 '환자번호': p.patient_id,
                 '이름': p.name,
                 '생년월일': p.birth_date,
@@ -4142,14 +4347,14 @@ class HealthCheckupApp {
                 '주소': p.address,
                 '비상연락처': p.emergency_contact,
                 '특이사항': p.notes,
-                '등록일': p.created_at,
-                '동기화상태': p.sync_status
+                '등록일': p.created_at
             })));
             XLSX.utils.book_append_sheet(wb, patientsWS, '환자');
 
             // 검진 데이터 시트
             const checkupsWS = XLSX.utils.json_to_sheet(checkups.map(c => ({
                 'ID': c.id,
+                'UUID': c.uuid || '',  // ⭐ UUID 추가 (중복 방지)
                 '검진번호': c.checkup_no,
                 '환자ID': c.patient_id,
                 '환자명': c.patient_name,
@@ -4158,38 +4363,26 @@ class HealthCheckupApp {
                 '검진날짜': c.checkup_date,
                 '검진시간': c.checkup_time,
                 '상태': c.status,
-                '검진의': c.examiner,
+                '담당의사': c.doctor_name,
                 '메모': c.memo,
                 '종합소견': c.conclusion,
-                '등록일': c.created_at,
-                '동기화상태': c.sync_status
+                '등록일': c.created_at
             })));
             XLSX.utils.book_append_sheet(wb, checkupsWS, '검진');
 
-            // 검진유형 데이터 시트
-            const checkupTypesWS = XLSX.utils.json_to_sheet(checkupTypes.map(t => ({
-                'ID': t.id,
-                '유형명': t.type_name,
-                '유형코드': t.type_code,
-                '설명': t.description,
-                '소요시간(분)': t.duration_minutes,
-                '등록일': t.created_at
-            })));
-            XLSX.utils.book_append_sheet(wb, checkupTypesWS, '검진유형');
-
             // 검진항목 데이터 시트
-            const checkupItemsWS = XLSX.utils.json_to_sheet(checkupItems.map(i => ({
-                'ID': i.id,
-                '검진ID': i.checkup_id,
-                '카테고리': i.item_category,
-                '항목명': i.item_name,
-                '항목값': i.item_value,
-                '단위': i.unit,
-                '정상범위': i.normal_range,
-                '상태': i.status,
-                '메모': i.memo,
-                '등록일': i.created_at,
-                '동기화상태': i.sync_status
+            const checkupItemsWS = XLSX.utils.json_to_sheet(checkupItems.map(item => ({
+                'ID': item.id,
+                'UUID': item.uuid || '',  // ⭐ UUID 추가
+                '검진ID': item.checkup_id,
+                '항목분류': item.item_category,
+                '항목명': item.item_name,
+                '항목값': item.item_value,
+                '단위': item.unit,
+                '참고범위': item.reference_range,
+                '상태': item.status,
+                '비고': item.notes,
+                '등록일': item.created_at
             })));
             XLSX.utils.book_append_sheet(wb, checkupItemsWS, '검진항목');
 
@@ -4222,10 +4415,16 @@ class HealthCheckupApp {
             console.log('📋 엑셀 시트 목록:', wb.SheetNames);
 
             let importStats = {
-                patients: { success: 0, skip: 0, error: 0 },
-                checkups: { success: 0, skip: 0, error: 0 },
-                checkupTypes: { success: 0, skip: 0, error: 0 },
-                checkupItems: { success: 0, skip: 0, error: 0 }
+                patients: { success: 0, updated: 0, skip: 0, error: 0 },
+                checkups: { success: 0, updated: 0, skip: 0, error: 0 },
+                checkupItems: { success: 0, updated: 0, skip: 0, error: 0 }
+            };
+
+            // ID 매핑 테이블 (기존 ID → 새 ID)
+            const idMappings = {
+                patients: new Map(),
+                checkups: new Map(),
+                checkupItems: new Map()
             };
 
             // 환자 데이터 임포트
@@ -4237,71 +4436,86 @@ class HealthCheckupApp {
 
                 for (const row of patients) {
                     try {
-                        const patient = {
-                            id: row['ID'],
-                            patient_id: row['환자번호'],
-                            name: row['이름'],
-                            birth_date: row['생년월일'],
-                            gender: row['성별'],
-                            phone: row['전화번호'],
-                            email: row['이메일'],
-                            address: row['주소'],
-                            emergency_contact: row['비상연락처'],
-                            notes: row['특이사항'],
-                            created_at: row['등록일'],
-                            sync_status: 'pending'
-                        };
+                        const oldId = row['ID'];
+                        const uuid = row['UUID'];  // ⭐ UUID 읽기
+                        const patientId = row['환자번호'];
 
-                        // 중복 확인
-                        const existing = await this.getFromStore(this.stores.patients, patient.id);
+                        // UUID로 중복 확인 (최우선) - 가장 정확한 중복 검사
+                        const allPatients = await this.getAllFromStore(this.stores.patients);
+                        let existing = null;
+
+                        if (uuid) {
+                            existing = allPatients.find(p => p.uuid === uuid);
+                            if (existing) {
+                                console.log(`   🔍 UUID 일치 발견: ${uuid}`);
+                            }
+                        }
+
+                        // UUID가 없거나 일치하는 데이터가 없으면 patient_id로 확인
+                        if (!existing) {
+                            existing = allPatients.find(p => p.patient_id === patientId);
+                        }
+
                         if (existing) {
-                            importStats.patients.skip++;
+                            // 기존 환자가 있으면 업데이트
+                            const updatedPatient = {
+                                ...existing,
+                                uuid: uuid || existing.uuid,  // UUID 업데이트 (없으면 기존 값 유지)
+                                name: row['이름'],
+                                birth_date: row['생년월일'],
+                                gender: row['성별'],
+                                phone: row['전화번호'],
+                                email: row['이메일'],
+                                address: row['주소'],
+                                emergency_contact: row['비상연락처'],
+                                notes: row['특이사항'],
+                                sync_status: 'pending',
+                                action: 'update'  // 업데이트 액션으로 동기화
+                            };
+
+                            await this.updateInStore(this.stores.patients, updatedPatient);
+                            idMappings.patients.set(oldId, existing.id);
+                            importStats.patients.updated++;
+                            console.log(`   🔄 환자번호 ${patientId} 업데이트 (ID: ${existing.id}, UUID: ${uuid})`);
                         } else {
+                            // 새 ID 생성 (기존 ID는 무시)
+                            const maxId = allPatients.reduce((max, p) => {
+                                const id = typeof p.id === 'number' ? p.id : 0;
+                                return Math.max(max, id);
+                            }, 0);
+                            const newId = maxId + 1;
+
+                            const patient = {
+                                id: newId,
+                                uuid: uuid || this.generateUUID(),  // UUID가 없으면 새로 생성
+                                patient_id: patientId,
+                                name: row['이름'],
+                                birth_date: row['생년월일'],
+                                gender: row['성별'],
+                                phone: row['전화번호'],
+                                email: row['이메일'],
+                                address: row['주소'],
+                                emergency_contact: row['비상연락처'],
+                                notes: row['특이사항'],
+                                created_at: row['등록일'] || new Date().toISOString(),
+                                sync_status: 'pending',
+                                action: 'create'  // 동기화를 위한 액션 추가
+                            };
+
                             await this.addToStore(this.stores.patients, patient);
+                            idMappings.patients.set(oldId, newId);
                             importStats.patients.success++;
+                            console.log(`   ✅ 환자번호 ${patientId} 추가 (기존 ID: ${oldId} → 새 ID: ${newId}, UUID: ${patient.uuid})`);
                         }
                     } catch (error) {
                         console.error('   ❌ 환자 데이터 임포트 오류:', error, row);
                         importStats.patients.error++;
                     }
                 }
-                console.log(`   ✅ 환자: ${importStats.patients.success}개 추가, ${importStats.patients.skip}개 건너뜀, ${importStats.patients.error}개 오류`);
+                console.log(`   ✅ 환자: ${importStats.patients.success}개 추가, ${importStats.patients.updated}개 업데이트, ${importStats.patients.skip}개 건너뜀, ${importStats.patients.error}개 오류`);
             }
 
-            // 검진유형 데이터 임포트
-            if (wb.SheetNames.includes('검진유형')) {
-                console.log('📋 검진유형 데이터 임포트 시작...');
-                const typesSheet = wb.Sheets['검진유형'];
-                const types = XLSX.utils.sheet_to_json(typesSheet);
-                console.log(`   검진유형 데이터 ${types.length}개 발견`);
-
-                for (const row of types) {
-                    try {
-                        const type = {
-                            id: row['ID'],
-                            type_name: row['유형명'],
-                            type_code: row['유형코드'],
-                            description: row['설명'],
-                            duration_minutes: row['소요시간(분)'],
-                            created_at: row['등록일']
-                        };
-
-                        const existing = await this.getFromStore(this.stores.checkupTypes, type.id);
-                        if (existing) {
-                            importStats.checkupTypes.skip++;
-                        } else {
-                            await this.addToStore(this.stores.checkupTypes, type);
-                            importStats.checkupTypes.success++;
-                        }
-                    } catch (error) {
-                        console.error('   ❌ 검진유형 데이터 임포트 오류:', error, row);
-                        importStats.checkupTypes.error++;
-                    }
-                }
-                console.log(`   ✅ 검진유형: ${importStats.checkupTypes.success}개 추가, ${importStats.checkupTypes.skip}개 건너뜀, ${importStats.checkupTypes.error}개 오류`);
-            }
-
-            // 검진 데이터 임포트
+            // 검진 데이터 임포트 (환자 ID 매핑 적용)
             if (wb.SheetNames.includes('검진')) {
                 console.log('🏥 검진 데이터 임포트 시작...');
                 const checkupsSheet = wb.Sheets['검진'];
@@ -4310,104 +4524,257 @@ class HealthCheckupApp {
 
                 for (const row of checkups) {
                     try {
-                        const checkup = {
-                            id: row['ID'],
-                            checkup_no: row['검진번호'],
-                            patient_id: row['환자ID'],
-                            patient_name: row['환자명'],
-                            checkup_type_id: row['검진유형ID'],
-                            type_name: row['검진유형명'],
-                            checkup_date: row['검진날짜'],
-                            checkup_time: row['검진시간'],
-                            status: row['상태'],
-                            examiner: row['검진의'],
-                            memo: row['메모'],
-                            conclusion: row['종합소견'],
-                            created_at: row['등록일'],
-                            sync_status: 'pending'
-                        };
+                        const oldId = row['ID'];
+                        const uuid = row['UUID'];  // ⭐ UUID 읽기
+                        const checkupNo = row['검진번호'];
+                        const oldPatientId = row['환자ID'];
 
-                        const existing = await this.getFromStore(this.stores.checkups, checkup.id);
+                        // UUID로 중복 확인 (최우선) - 가장 정확한 중복 검사
+                        const allCheckups = await this.getAllFromStore(this.stores.checkups);
+                        let existing = null;
+
+                        if (uuid) {
+                            existing = allCheckups.find(c => c.uuid === uuid);
+                            if (existing) {
+                                console.log(`   🔍 UUID 일치 발견: ${uuid}`);
+                            }
+                        }
+
+                        // UUID가 없거나 일치하는 데이터가 없으면 checkup_no로 확인
+                        if (!existing) {
+                            existing = allCheckups.find(c => c.checkup_no === checkupNo);
+                        }
+
                         if (existing) {
-                            importStats.checkups.skip++;
+                            // 기존 검진이 있으면 업데이트
+                            // 외래키 매핑 (환자 ID)
+                            const newPatientId = idMappings.patients.get(oldPatientId) || oldPatientId;
+
+                            const updatedCheckup = {
+                                ...existing,
+                                uuid: uuid || existing.uuid,  // UUID 업데이트 (없으면 기존 값 유지)
+                                patient_id: newPatientId,
+                                patient_name: row['환자명'],
+                                checkup_type_id: row['검진유형ID'],
+                                type_name: row['검진유형명'],
+                                checkup_date: row['검진날짜'],
+                                checkup_time: row['검진시간'],
+                                status: row['상태'] || existing.status,
+                                doctor_name: row['담당의사'],
+                                memo: row['메모'],
+                                conclusion: row['종합소견'],
+                                sync_status: 'pending',
+                                action: 'update'  // 업데이트 액션으로 동기화
+                            };
+
+                            await this.updateInStore(this.stores.checkups, updatedCheckup);
+                            idMappings.checkups.set(oldId, existing.id);
+                            importStats.checkups.updated++;
+                            console.log(`   🔄 검진번호 ${checkupNo} 업데이트 (ID: ${existing.id}, UUID: ${uuid})`);
                         } else {
+                            // 외래키 매핑 (환자 ID)
+                            const newPatientId = idMappings.patients.get(oldPatientId) || oldPatientId;
+
+                            // 외래키 검증
+                            if (!newPatientId) {
+                                console.warn(`   ⚠️ 검진번호 ${checkupNo}: 환자 ID 매핑 실패 (환자ID: ${oldPatientId} → ${newPatientId})`);
+                                importStats.checkups.error++;
+                                continue;
+                            }
+
+                            // 새 ID 생성
+                            const maxId = allCheckups.reduce((max, c) => {
+                                const id = typeof c.id === 'number' ? c.id : 0;
+                                return Math.max(max, id);
+                            }, 0);
+                            const newId = maxId + 1;
+
+                            const checkup = {
+                                id: newId,
+                                uuid: uuid || this.generateUUID(),  // UUID가 없으면 새로 생성
+                                checkup_no: checkupNo,
+                                patient_id: newPatientId,
+                                patient_name: row['환자명'],
+                                checkup_type_id: row['검진유형ID'],
+                                type_name: row['검진유형명'],
+                                checkup_date: row['검진날짜'],
+                                checkup_time: row['검진시간'],
+                                status: row['상태'] || '예약됨',
+                                doctor_name: row['담당의사'],
+                                memo: row['메모'],
+                                conclusion: row['종합소견'],
+                                created_at: row['등록일'] || new Date().toISOString(),
+                                sync_status: 'pending',
+                                action: 'create'  // 동기화를 위한 액션 추가
+                            };
+
                             await this.addToStore(this.stores.checkups, checkup);
+                            idMappings.checkups.set(oldId, newId);
                             importStats.checkups.success++;
+                            console.log(`   ✅ 검진번호 ${checkupNo} 추가 (기존 ID: ${oldId} → 새 ID: ${newId}, 환자ID: ${oldPatientId} → ${newPatientId})`);
                         }
                     } catch (error) {
                         console.error('   ❌ 검진 데이터 임포트 오류:', error, row);
                         importStats.checkups.error++;
                     }
                 }
-                console.log(`   ✅ 검진: ${importStats.checkups.success}개 추가, ${importStats.checkups.skip}개 건너뜀, ${importStats.checkups.error}개 오류`);
+                console.log(`   ✅ 검진: ${importStats.checkups.success}개 추가, ${importStats.checkups.updated}개 업데이트, ${importStats.checkups.skip}개 건너뜀, ${importStats.checkups.error}개 오류`);
             }
 
-            // 검진항목 데이터 임포트
+            // 검진항목 데이터 임포트 (검진 ID 매핑 적용)
             if (wb.SheetNames.includes('검진항목')) {
-                console.log('📝 검진항목 데이터 임포트 시작...');
-                const itemsSheet = wb.Sheets['검진항목'];
-                const items = XLSX.utils.sheet_to_json(itemsSheet);
-                console.log(`   검진항목 데이터 ${items.length}개 발견`);
+                console.log('📋 검진항목 데이터 임포트 시작...');
+                const checkupItemsSheet = wb.Sheets['검진항목'];
+                const checkupItems = XLSX.utils.sheet_to_json(checkupItemsSheet);
+                console.log(`   검진항목 데이터 ${checkupItems.length}개 발견`);
 
-                for (const row of items) {
+                for (const row of checkupItems) {
                     try {
-                        const item = {
-                            id: row['ID'],
-                            checkup_id: row['검진ID'],
-                            item_category: row['카테고리'],
-                            item_name: row['항목명'],
-                            item_value: row['항목값'],
-                            unit: row['단위'],
-                            normal_range: row['정상범위'],
-                            status: row['상태'],
-                            memo: row['메모'],
-                            created_at: row['등록일'],
-                            sync_status: 'pending'
-                        };
+                        const oldId = row['ID'];
+                        const uuid = row['UUID'];  // ⭐ UUID 읽기
+                        const oldCheckupId = row['검진ID'];
 
-                        const existing = await this.getFromStore(this.stores.checkupItems, item.id);
+                        // UUID로 중복 확인 (최우선)
+                        const allItems = await this.getAllFromStore(this.stores.checkupItems);
+                        let existing = null;
+
+                        if (uuid) {
+                            existing = allItems.find(item => item.uuid === uuid);
+                            if (existing) {
+                                console.log(`   🔍 UUID 일치 발견: ${uuid}`);
+                            }
+                        }
+
+                        // UUID가 없거나 일치하는 데이터가 없으면 ID로 확인 (폴백)
+                        if (!existing && oldId) {
+                            existing = allItems.find(item => item.id === oldId);
+                        }
+
                         if (existing) {
-                            importStats.checkupItems.skip++;
+                            // 기존 검진항목이 있으면 업데이트
+                            // 외래키 매핑 (검진 ID)
+                            const newCheckupId = idMappings.checkups.get(oldCheckupId) || oldCheckupId;
+
+                            const updatedItem = {
+                                ...existing,
+                                uuid: uuid || existing.uuid,
+                                checkup_id: newCheckupId,
+                                item_category: row['항목분류'],
+                                item_name: row['항목명'],
+                                item_value: row['항목값'],
+                                unit: row['단위'],
+                                reference_range: row['참고범위'],
+                                status: row['상태'] || existing.status,
+                                notes: row['비고'],
+                                sync_status: 'pending',
+                                action: 'update'
+                            };
+
+                            await this.updateInStore(this.stores.checkupItems, updatedItem);
+                            idMappings.checkupItems.set(oldId, existing.id);
+                            importStats.checkupItems.updated++;
+                            console.log(`   🔄 검진항목 업데이트 (ID: ${existing.id}, UUID: ${uuid})`);
                         } else {
-                            await this.addToStore(this.stores.checkupItems, item);
+                            // 외래키 매핑 (검진 ID)
+                            const newCheckupId = idMappings.checkups.get(oldCheckupId) || oldCheckupId;
+
+                            // 외래키 검증
+                            if (!newCheckupId) {
+                                console.warn(`   ⚠️ 검진항목: 검진 ID 매핑 실패 (검진ID: ${oldCheckupId} → ${newCheckupId})`);
+                                importStats.checkupItems.error++;
+                                continue;
+                            }
+
+                            // 새 ID 생성
+                            const maxId = allItems.reduce((max, item) => {
+                                const id = typeof item.id === 'number' ? item.id : 0;
+                                return Math.max(max, id);
+                            }, 0);
+                            const newId = maxId + 1;
+
+                            const checkupItem = {
+                                id: newId,
+                                uuid: uuid || this.generateUUID(),  // UUID가 없으면 새로 생성
+                                checkup_id: newCheckupId,
+                                item_category: row['항목분류'],
+                                item_name: row['항목명'],
+                                item_value: row['항목값'],
+                                unit: row['단위'],
+                                reference_range: row['참고범위'],
+                                status: row['상태'] || 'normal',
+                                notes: row['비고'],
+                                created_at: row['등록일'] || new Date().toISOString(),
+                                sync_status: 'pending',
+                                action: 'create'
+                            };
+
+                            await this.addToStore(this.stores.checkupItems, checkupItem);
+                            idMappings.checkupItems.set(oldId, newId);
                             importStats.checkupItems.success++;
+                            console.log(`   ✅ 검진항목 추가 (기존 ID: ${oldId} → 새 ID: ${newId}, 검진ID: ${oldCheckupId} → ${newCheckupId})`);
                         }
                     } catch (error) {
                         console.error('   ❌ 검진항목 데이터 임포트 오류:', error, row);
                         importStats.checkupItems.error++;
                     }
                 }
-                console.log(`   ✅ 검진항목: ${importStats.checkupItems.success}개 추가, ${importStats.checkupItems.skip}개 건너뜀, ${importStats.checkupItems.error}개 오류`);
+                console.log(`   ✅ 검진항목: ${importStats.checkupItems.success}개 추가, ${importStats.checkupItems.updated}개 업데이트, ${importStats.checkupItems.skip}개 건너뜀, ${importStats.checkupItems.error}개 오류`);
             }
 
             // 파일 입력 초기화
             event.target.value = '';
 
-            this.showLoading(false);
+            console.log('✅ 엑셀 업로드 완료:', importStats);
 
             // 결과 메시지
             const message = `
-                환자: ${importStats.patients.success}개 추가, ${importStats.patients.skip}개 건너뜀
-                검진: ${importStats.checkups.success}개 추가, ${importStats.checkups.skip}개 건너뜀
-                검진유형: ${importStats.checkupTypes.success}개 추가, ${importStats.checkupTypes.skip}개 건너뜀
-                검진항목: ${importStats.checkupItems.success}개 추가, ${importStats.checkupItems.skip}개 건너뜀
+                환자: ${importStats.patients.success}개 추가, ${importStats.patients.updated}개 업데이트
+                검진: ${importStats.checkups.success}개 추가, ${importStats.checkups.updated}개 업데이트
+                검진항목: ${importStats.checkupItems.success}개 추가, ${importStats.checkupItems.updated}개 업데이트
             `;
 
-            console.log('✅ 엑셀 업로드 완료:', importStats);
+            // 온라인/오프라인 상태에 따른 처리
+            if (this.isOnline) {
+                console.log('🌐 온라인 상태: 서버 동기화 시작...');
+                console.log('   📊 동기화 전 IndexedDB 데이터 확인...');
 
-            // 결과 메시지에 동기화 안내 추가
-            const syncNotice = this.isOnline ?
-                '\n\n💡 데이터가 로컬에 저장되었습니다.\n서버에 반영하려면 "데이터 동기화" 버튼을 눌러주세요.' :
-                '\n\n⚠️ 오프라인 상태입니다. 온라인 시 동기화하세요.';
+                // 동기화 전 데이터 확인
+                const beforeSync = {
+                    patients: await this.getAllFromStore(this.stores.patients),
+                    checkups: await this.getAllFromStore(this.stores.checkups)
+                };
+                console.log(`   환자: ${beforeSync.patients.length}명, 검진: ${beforeSync.checkups.length}건`);
 
-            this.showNotification('엑셀 데이터를 가져왔습니다.\n' + message + syncNotice, 'success');
+                // 자동 서버 동기화 실행 (엑셀에서 업로드된 pending 데이터 동기화)
+                // silent: true (중복 알림 방지), refreshView: false (refreshAllData로 통합)
+                const syncSuccess = await this.syncOfflineRequests({ silent: true, refreshView: false });
 
-            // 현재 화면 새로고침
-            if (this.currentSection === 'patients') {
-                this.loadPatients();
-            } else if (this.currentSection === 'checkups') {
-                this.loadCheckups();
+                this.showLoading(false);
+
+                if (syncSuccess) {
+                    this.showNotification('엑셀 데이터를 가져와 서버에 저장했습니다.\n' + message, 'success');
+                    console.log('✅ 서버 동기화 완료');
+                } else {
+                    this.showNotification('엑셀 데이터를 로컬에 저장했습니다.\n서버 동기화 실패: 수동으로 동기화하세요.\n' + message, 'warning');
+                    console.warn('⚠️ 서버 동기화 실패');
+                }
+            } else {
+                console.log('📴 오프라인 상태: 로컬에만 저장');
+                this.showLoading(false);
+                this.showNotification('엑셀 데이터를 로컬에 저장했습니다.\n온라인 시 자동 동기화됩니다.\n' + message, 'success');
             }
+
+            // 환자 관리 화면으로 이동
+            console.log('📍 환자 관리 화면으로 이동...');
+            this.showSection('patients');
+
+            // 환자 데이터 강제 새로고침 (IndexedDB 직접 조회)
+            console.log('🔄 환자 데이터 강제 새로고침...');
+            const patients = await this.getPatientsFromIndexedDB();
+            console.log(`   📊 조회된 환자: ${patients ? patients.length : 0}명`);
+            this.currentPatientsList = patients || [];
+            this.displayPatients(this.currentPatientsList);
+            console.log(`✅ 환자 ${this.currentPatientsList.length}명 화면에 표시 완료`);
         } catch (error) {
             console.error('❌ 엑셀 업로드 실패:', error);
             this.showLoading(false);
@@ -4444,6 +4811,153 @@ class HealthCheckupApp {
             request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
         });
+    }
+
+    // 모든 화면 데이터 새로고침 (IndexedDB 우선 조회)
+    async refreshAllData(forceIndexedDB = false) {
+        console.log('🔄 화면 데이터 새로고침 시작...', forceIndexedDB ? '(IndexedDB 우선)' : '', `현재 섹션: ${this.currentSection}`);
+        try {
+            if (forceIndexedDB) {
+                // IndexedDB에서 직접 데이터 로드 (엑셀 업로드 직후 등)
+                switch (this.currentSection) {
+                    case 'dashboard':
+                        await this.loadDashboard();
+                        break;
+                    case 'patients':
+                        console.log('   📥 IndexedDB에서 환자 데이터 조회 중...');
+                        const patients = await this.getPatientsFromIndexedDB();
+                        console.log(`   📊 조회된 환자 데이터: ${patients ? patients.length : 0}명`);
+                        this.currentPatientsList = patients || [];
+                        console.log('   🖥️ displayPatients() 호출...');
+                        this.displayPatients(this.currentPatientsList);
+                        console.log(`   ✅ 환자 ${this.currentPatientsList.length}명 표시 (IndexedDB)`);
+                        break;
+                    case 'checkups':
+                        console.log('   📥 IndexedDB에서 검진 데이터 조회 중...');
+                        const checkups = await this.getCheckupsFromIndexedDB();
+                        console.log(`   📊 조회된 검진 데이터: ${checkups ? checkups.length : 0}건`);
+                        this.currentCheckupsList = checkups || [];
+                        console.log('   🖥️ displayCheckups() 호출...');
+                        this.displayCheckups(this.currentCheckupsList);
+                        console.log(`   ✅ 검진 ${this.currentCheckupsList.length}건 표시 (IndexedDB)`);
+                        break;
+                    case 'calendar':
+                        if (typeof this.loadCalendar === 'function') {
+                            await this.loadCalendar();
+                        }
+                        break;
+                    case 'reports':
+                        if (typeof this.loadReports === 'function') {
+                            await this.loadReports();
+                        }
+                        break;
+                    default:
+                        console.log('현재 섹션을 새로고침할 수 없습니다:', this.currentSection);
+                }
+            } else {
+                // 기존 로직 (서버 API 우선)
+                switch (this.currentSection) {
+                    case 'dashboard':
+                        await this.loadDashboard();
+                        break;
+                    case 'patients':
+                        await this.loadPatients();
+                        break;
+                    case 'checkups':
+                        await this.loadCheckups();
+                        break;
+                    case 'calendar':
+                        if (typeof this.loadCalendar === 'function') {
+                            await this.loadCalendar();
+                        }
+                        break;
+                    case 'reports':
+                        if (typeof this.loadReports === 'function') {
+                            await this.loadReports();
+                        }
+                        break;
+                    default:
+                        console.log('현재 섹션을 새로고침할 수 없습니다:', this.currentSection);
+                }
+            }
+
+            // 대시보드 통계는 항상 업데이트
+            if (this.currentSection !== 'dashboard') {
+                await this.updateDashboardStats();
+            }
+
+            console.log('✅ 화면 데이터 새로고침 완료');
+        } catch (error) {
+            console.error('❌ 화면 데이터 새로고침 실패:', error);
+        }
+    }
+
+    // 대시보드 통계만 업데이트
+    async updateDashboardStats() {
+        try {
+            let stats;
+            if (this.isOnline) {
+                try {
+                    const response = await fetch(`${this.apiUrl}/dashboard/stats`, {
+                        cache: 'no-cache',
+                        headers: {
+                            'Accept': 'application/json',
+                            'Content-Type': 'application/json'
+                        }
+                    });
+
+                    if (response.ok) {
+                        const contentType = response.headers.get('content-type');
+                        if (contentType && contentType.includes('application/json')) {
+                            const data = await response.json();
+                            if (data.success && data.stats) {
+                                // snake_case를 camelCase로 변환
+                                stats = {
+                                    totalPatients: data.stats.total_patients || 0,
+                                    todayCheckups: data.stats.today_checkups || 0,
+                                    inProgressCheckups: data.stats.in_progress_checkups || 0,
+                                    completedCheckups: data.stats.completed_checkups || 0
+                                };
+                            }
+                        } else {
+                            console.warn('⚠️ 서버가 JSON이 아닌 응답을 반환했습니다:', contentType);
+                        }
+                    }
+                } catch (fetchError) {
+                    console.warn('⚠️ 대시보드 통계 API 호출 실패, 오프라인 데이터 사용:', fetchError.message);
+                }
+            }
+
+            if (!stats) {
+                // 오프라인이거나 API 실패 시 IndexedDB에서 통계 계산
+                const patients = await this.getAllFromStore(this.stores.patients);
+                const checkups = await this.getAllFromStore(this.stores.checkups);
+
+                stats = {
+                    totalPatients: patients.length,
+                    todayCheckups: checkups.filter(c => {
+                        const today = new Date().toISOString().split('T')[0];
+                        return c.checkup_date === today;
+                    }).length,
+                    inProgressCheckups: checkups.filter(c => c.status === '진행중').length,
+                    completedCheckups: checkups.filter(c => c.status === '완료').length
+                };
+            }
+
+            // 통계 UI 업데이트
+            const totalPatientsEl = document.getElementById('total-patients');
+            const todayCheckupsEl = document.getElementById('today-checkups');
+            const inProgressCheckupsEl = document.getElementById('in-progress-checkups');
+            const completedCheckupsEl = document.getElementById('completed-checkups');
+
+            if (totalPatientsEl) totalPatientsEl.textContent = stats.totalPatients || 0;
+            if (todayCheckupsEl) todayCheckupsEl.textContent = stats.todayCheckups || 0;
+            if (inProgressCheckupsEl) inProgressCheckupsEl.textContent = stats.inProgressCheckups || 0;
+            if (completedCheckupsEl) completedCheckupsEl.textContent = stats.completedCheckups || 0;
+
+        } catch (error) {
+            console.error('❌ 대시보드 통계 업데이트 실패:', error);
+        }
     }
 }
 

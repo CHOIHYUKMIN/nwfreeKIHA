@@ -26,17 +26,155 @@ class ServiceWorkerManager {
             this.swRegistration = await navigator.serviceWorker.register('./sw.js', {
                 scope: './'
             });
-            
+
             console.log('Service Worker 등록 성공:', this.swRegistration);
-            
+
             // Service Worker 상태 업데이트
             this.updateServiceWorkerStatus();
-            
+
+            // 자동 업데이트 감지 설정
+            this.setupAutoUpdate();
+
             return this.swRegistration;
         } catch (error) {
             console.error('Service Worker 등록 실패:', error);
             throw error;
         }
+    }
+
+    setupAutoUpdate() {
+        if (!this.swRegistration) return;
+
+        // 새 버전 발견 시
+        this.swRegistration.addEventListener('updatefound', () => {
+            const newWorker = this.swRegistration.installing;
+            console.log('🆕 새로운 Service Worker 버전 발견!');
+
+            newWorker.addEventListener('statechange', () => {
+                console.log('Service Worker 상태 변경:', newWorker.state);
+
+                // 새 SW가 설치되고 waiting 상태가 되면
+                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                    console.log('✨ 새 버전이 준비되었습니다!');
+                    this.showUpdateNotification();
+                }
+            });
+        });
+
+        // 주기적으로 업데이트 확인 (1시간마다)
+        setInterval(() => {
+            console.log('🔄 Service Worker 업데이트 확인 중...');
+            this.swRegistration.update();
+        }, 60 * 60 * 1000);
+
+        // 페이지 포커스 시 업데이트 확인
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                console.log('👁️ 페이지 포커스 - Service Worker 업데이트 확인');
+                this.swRegistration.update();
+            }
+        });
+    }
+
+    showUpdateNotification() {
+        // 업데이트 알림 배너 생성
+        const existingBanner = document.getElementById('update-banner');
+        if (existingBanner) {
+            existingBanner.remove();
+        }
+
+        const banner = document.createElement('div');
+        banner.id = 'update-banner';
+        banner.style.cssText = `
+            position: fixed;
+            top: 70px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 25px;
+            border-radius: 10px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            z-index: 10000;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            animation: slideDown 0.3s ease;
+        `;
+
+        banner.innerHTML = `
+            <i class="fas fa-sync-alt" style="font-size: 20px;"></i>
+            <span style="flex: 1;">
+                <strong>새 버전 업데이트</strong><br>
+                <small>새로운 기능과 개선사항이 있습니다.</small>
+            </span>
+            <button id="update-now-btn" style="
+                background: white;
+                color: #667eea;
+                border: none;
+                padding: 8px 20px;
+                border-radius: 5px;
+                cursor: pointer;
+                font-weight: bold;
+            ">
+                지금 업데이트
+            </button>
+            <button id="update-later-btn" style="
+                background: transparent;
+                color: white;
+                border: 1px solid white;
+                padding: 8px 15px;
+                border-radius: 5px;
+                cursor: pointer;
+            ">
+                나중에
+            </button>
+        `;
+
+        document.body.appendChild(banner);
+
+        // 업데이트 버튼 클릭
+        document.getElementById('update-now-btn').addEventListener('click', () => {
+            this.applyUpdate();
+        });
+
+        // 나중에 버튼 클릭
+        document.getElementById('update-later-btn').addEventListener('click', () => {
+            banner.remove();
+        });
+
+        // 5초 후 자동으로 적용
+        setTimeout(() => {
+            if (document.getElementById('update-banner')) {
+                console.log('⏰ 5초 경과 - 자동으로 업데이트 적용');
+                this.applyUpdate();
+            }
+        }, 5000);
+    }
+
+    applyUpdate() {
+        const banner = document.getElementById('update-banner');
+        if (banner) {
+            banner.innerHTML = `
+                <i class="fas fa-spinner fa-spin" style="font-size: 20px;"></i>
+                <span>업데이트 적용 중...</span>
+            `;
+        }
+
+        // waiting 중인 Service Worker에게 skipWaiting 메시지 전송
+        if (this.swRegistration.waiting) {
+            this.swRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
+        }
+
+        // 컨트롤러 변경 시 페이지 새로고침
+        let refreshing = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+            if (!refreshing) {
+                refreshing = true;
+                console.log('🔄 새 Service Worker 활성화 - 페이지 새로고침');
+                window.location.reload();
+            }
+        });
     }
 
     setupServiceWorkerEvents() {
