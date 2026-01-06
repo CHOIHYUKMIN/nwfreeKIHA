@@ -5,7 +5,7 @@ const sql = require('mssql');
 
 const config = {
     server: process.env.DB_SERVER || '172.19.18.112',
-    database: process.env.DB_DATABASE || 'PWAPOC',
+    database: 'PWAPOC_BACK',
     user: process.env.DB_USER || 'sa',
     password: process.env.DB_PASSWORD,
     options: {
